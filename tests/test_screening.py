@@ -216,7 +216,6 @@ def test_lint_allows_en_dash_before_present():
     [
         "I am writing to express my interest in the role.",
         "A detail-oriented professional with a proven track record.",
-        "I would welcome the opportunity to discuss further.",
         "We delve into the data.",
         "A seamless, best-in-class solution.",
     ],
@@ -390,3 +389,196 @@ def test_voice_rules_reach_both_student_facing_prompts():
     anchor = "does not read as machine-generated"
     assert anchor in TAILOR_PROMPT
     assert anchor in COVER_LETTER_PROMPT
+
+
+# ---------------------------------------------------------------------------
+# sanitize_dashes — the hard no-em-dash guarantee
+# ---------------------------------------------------------------------------
+
+
+def test_sanitize_replaces_spaced_em_dash_with_comma():
+    from scripts.orchestration import sanitize_dashes
+
+    out, changes = sanitize_dashes("The model — a gradient booster — ran nightly.")
+    assert "\u2014" not in out
+    assert out == "The model, a gradient booster, ran nightly."
+    assert len(changes) == 1
+    assert changes[0]["line"] == 1
+
+
+def test_sanitize_uses_en_dash_for_numeric_ranges():
+    """'2020—2024' is a range, not punctuation. A comma there would be
+    wrong; an en dash is the typographically correct form."""
+    from scripts.orchestration import sanitize_dashes
+
+    out, _ = sanitize_dashes("Worked there 2020—2024 on pricing.")
+    assert "\u2014" not in out
+    assert "2020\u20132024" in out
+
+
+def test_sanitize_leaves_clean_text_untouched():
+    from scripts.orchestration import sanitize_dashes
+
+    doc = "Built Power BI dashboards, cutting refresh time 40%.\n"
+    out, changes = sanitize_dashes(doc)
+    assert out == doc
+    assert changes == []
+
+
+def test_sanitize_preserves_en_dash_date_ranges():
+    """The resume date format uses en dashes deliberately. Sanitizing em
+    dashes must not disturb them."""
+    from scripts.orchestration import sanitize_dashes
+
+    doc = "### Data Analyst - Acme (Mar 2022 \u2013 Aug 2024)"
+    out, changes = sanitize_dashes(doc)
+    assert out == doc
+    assert changes == []
+
+
+def test_sanitize_does_not_leave_doubled_punctuation():
+    from scripts.orchestration import sanitize_dashes
+
+    out, _ = sanitize_dashes("One thing mattered —, the definitions.")
+    assert ",," not in out
+    assert " ," not in out
+
+
+def test_sanitize_preserves_trailing_newline():
+    from scripts.orchestration import sanitize_dashes
+
+    out, _ = sanitize_dashes("A — B\n")
+    assert out.endswith("\n")
+    out2, _ = sanitize_dashes("A — B")
+    assert not out2.endswith("\n")
+
+
+def test_cli_sanitize_dashes_rewrites_file(tmp_path: Path):
+    f = tmp_path / "cover.md"
+    f.write_text("I built it — and it worked.\n", encoding="utf-8")
+    r = _run(["sanitize-dashes", "--input", str(f)])
+    assert r.returncode == 0, r.stderr
+    assert "\u2014" not in f.read_text(encoding="utf-8")
+    assert "rewrote 1 line" in r.stdout
+
+
+def test_cli_sanitize_dashes_check_mode_does_not_write(tmp_path: Path):
+    f = tmp_path / "cover.md"
+    original = "I built it — and it worked.\n"
+    f.write_text(original, encoding="utf-8")
+    r = _run(["sanitize-dashes", "--input", str(f), "--check"])
+    assert r.returncode == 1
+    assert f.read_text(encoding="utf-8") == original
+
+
+def test_cli_sanitize_dashes_check_mode_exits_0_when_clean(tmp_path: Path):
+    f = tmp_path / "cover.md"
+    f.write_text("No dashes here.\n", encoding="utf-8")
+    r = _run(["sanitize-dashes", "--input", str(f), "--check"])
+    assert r.returncode == 0
+    assert "no em dashes" in r.stdout
+
+
+# ---------------------------------------------------------------------------
+# Cover-letter prompt: the requirements the student specified
+# ---------------------------------------------------------------------------
+
+
+def _cover_prompt(relocation: str = "(none)") -> str:
+    from scripts.prompts import build_prompt
+
+    return build_prompt(
+        "cover-letter",
+        contact_info="# Ana\na@x.com",
+        today_date="May 2, 2026",
+        tailored_resume="R",
+        jd_text="J",
+        jd_keywords="K",
+        company_research="C",
+        folder_summary="E",
+        relocation_context=relocation,
+    )
+
+
+def test_cover_prompt_specifies_three_to_four_paragraphs():
+    p = _cover_prompt()
+    assert "Three to four body paragraphs" in p
+    assert "One page maximum" in p
+
+
+def test_cover_prompt_carries_the_storytelling_chain():
+    """The student's central ask: situation encountered -> conclusion
+    drawn -> resulting interest in a specific task in this posting."""
+    p = _cover_prompt()
+    assert "THE MOST IMPORTANT PARAGRAPH" in p
+    assert "I encountered [specific situation]" in p
+    assert "which showed me [specific conclusion drawn]" in p
+    assert "interests me" in p
+
+
+def test_cover_prompt_forbids_inventing_the_story():
+    p = _cover_prompt()
+    assert "Do not invent an" in p and "experience to make a better story" in p
+
+
+def test_cover_prompt_requires_a_named_recipient():
+    p = _cover_prompt()
+    assert "To Whom It May" in p  # named in order to forbid it
+    assert "LinkedIn" in p
+
+
+def test_cover_prompt_permits_the_conventional_european_openers():
+    """The student explicitly asked for these. They were on the banned
+    list after the AI-detection pass; the resolution is that they're
+    permitted WITH a specific clause."""
+    p = _cover_prompt()
+    assert "I am writing to apply for the Financial Analyst position" in p
+    assert "I would welcome the opportunity to discuss" in p
+    assert "The second half of that sentence is what makes it work" in p
+
+
+def test_cover_prompt_bans_overclaiming():
+    p = _cover_prompt()
+    for phrase in ("I am the best fit for this role.",
+                   "I will revolutionize your processes."):
+        assert phrase in p
+    assert "My experience enables me to contribute to improving" in p
+
+
+def test_cover_prompt_includes_relocation_block_when_set():
+    p = _cover_prompt("Non-EU citizen, post-study permit in Austria.")
+    assert "Non-EU citizen, post-study permit in Austria." in p
+    assert "{relocation_context}" not in p
+
+
+def test_relocation_guidance_forbids_inventing_visa_status():
+    """Misstating someone's right to work is not a style problem."""
+    p = _cover_prompt("x")
+    assert "Never state a permit, visa, or eligibility status that is not" in p
+
+
+def test_relocation_guidance_rejects_tourism_reasons():
+    p = _cover_prompt("x")
+    assert "Not the weather, not the food" in p
+    assert "Signal duration" in p
+
+
+def test_conventional_formulas_are_advisory_not_errors():
+    """These are the student's requested formulations. The linter must
+    not report them under the same code as a genuine AI tell."""
+    findings = lint_output(
+        "I am writing to apply for the Analyst role.", kind="cover-letter"
+    )
+    codes = {f["code"] for f in findings}
+    assert "CHECK_SPECIFICITY" in codes
+    assert "AI_TELL_PHRASE" not in codes
+
+
+def test_linter_flags_to_whom_it_may_concern():
+    findings = lint_output("To Whom It May Concern,", kind="cover-letter")
+    assert "UNNAMED_RECIPIENT" in {f["code"] for f in findings}
+
+
+def test_linter_flags_overclaiming():
+    findings = lint_output("I am the best fit for this role.", kind="cover-letter")
+    assert "AI_TELL_PHRASE" in {f["code"] for f in findings}

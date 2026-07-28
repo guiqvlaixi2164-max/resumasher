@@ -924,12 +924,16 @@ def keyword_coverage(terms: list[str], document: str) -> dict:
 AI_TELL_PHRASES: tuple[str, ...] = (
     # Cover-letter openings that mark a letter as templated
     "i am writing to express",
-    "i am writing to apply",
     "i am excited to apply",
     "i was thrilled to see",
     "please accept this letter",
     "i am reaching out regarding",
-    "i would welcome the opportunity to discuss",
+    # Overclaiming — reads as bluster, and European recruiters flag it
+    "i am the best fit",
+    "i am the ideal candidate",
+    "i will revolutionize",
+    "i will transform your",
+    "exceed your expectations",
     # Empty self-description
     "results-driven", "results-oriented", "detail-oriented", "self-starter",
     "go-getter", "team player", "hardworking", "highly motivated",
@@ -944,6 +948,19 @@ AI_TELL_PHRASES: tuple[str, ...] = (
     "moreover,", "furthermore,",
 )
 
+# Conventional European motivation-letter formulas. These are NOT banned:
+# "I am writing to apply for the X position at Y, where <specific thing>"
+# is the expected register in DACH/EU applications, and the student asked
+# for it. But the same opener with nothing specific after it is a mail
+# merge, and that is what a reader reacts to. So we surface them as a
+# check-this advisory rather than an error, with a hint naming the actual
+# test. Distinct code so the summary can present them differently.
+CONVENTIONAL_FORMULAS: tuple[str, ...] = (
+    "i am writing to apply",
+    "i would welcome the opportunity to discuss",
+)
+
+_TO_WHOM_RE = re.compile(r"to whom it may concern", re.IGNORECASE)
 _EM_DASH_RE = re.compile(r"[—]")
 # En dash flagged only when NOT between two date-ish tokens, since
 # "Mar 2022 – Aug 2024" is the prescribed date format.
@@ -959,6 +976,70 @@ def _strip_markdown_noise(text: str) -> str:
     text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)
     text = re.sub(r"<!--.*?-->", " ", text, flags=re.DOTALL)
     return text
+
+
+# ---------------------------------------------------------------------------
+# 6.7 sanitize_dashes: guarantee no em dash survives into a cover letter
+# ---------------------------------------------------------------------------
+#
+# lint_output only WARNS about em dashes, and a warning depends on someone
+# acting on it. For the cover letter the requirement is absolute: the
+# character must not reach the employer. So this rewrites the file.
+#
+# Replacement is deliberately conservative. An em dash in English prose is
+# almost always doing one of three jobs, and a comma covers the first two
+# safely:
+#
+#   appositive   "the model — a gradient booster — ran nightly"  -> commas
+#   amplifying   "one thing mattered — the definitions"          -> comma
+#   numeric range "2020—2024"                                    -> en dash
+#
+# A comma occasionally produces a splice where a period would read better.
+# That is why every replacement is reported with its line number: the
+# orchestrator re-reads those lines, and the student sees them flagged.
+# Silent rewriting of prose without telling anyone would be worse than the
+# em dash.
+
+_NUMERIC_RANGE_DASH_RE = re.compile(r"(?<=\d)\s*—\s*(?=\d)")
+_SPACED_EM_DASH_RE = re.compile(r"\s*—\s*")
+
+
+def sanitize_dashes(document: str) -> tuple[str, list[dict]]:
+    """Strip em dashes from `document`. Returns (new_text, changes).
+
+    Each change records the 1-indexed line number and the before/after
+    text so a caller can surface exactly what was rewritten.
+    """
+    changes: list[dict] = []
+    out_lines: list[str] = []
+
+    for lineno, line in enumerate(document.splitlines(), start=1):
+        if "—" not in line:
+            out_lines.append(line)
+            continue
+        original = line
+        # Numeric ranges first: "2020—2024" is a range, not punctuation,
+        # and an en dash is the typographically correct form there.
+        line = _NUMERIC_RANGE_DASH_RE.sub("–", line)
+        # Everything else becomes a comma. Leading/trailing space around
+        # the original dash is absorbed so we don't emit " , ".
+        line = _SPACED_EM_DASH_RE.sub(", ", line)
+        # An em dash opening a line (a stray bullet-ish dash) would have
+        # produced a leading ", ". Strip that.
+        line = re.sub(r"^\s*,\s*", "", line)
+        # Collapse any doubled punctuation the substitution created.
+        line = re.sub(r",\s*,", ",", line)
+        line = re.sub(r"\s+,", ",", line)
+        line = re.sub(r",\s*([.;:!?])", r"\1", line)
+        out_lines.append(line)
+        changes.append({
+            "line": lineno,
+            "before": original.strip(),
+            "after": line.strip(),
+        })
+
+    trailing = "\n" if document.endswith("\n") else ""
+    return "\n".join(out_lines) + trailing, changes
 
 
 def lint_output(document: str, *, kind: str = "resume") -> list[dict]:
@@ -1017,6 +1098,28 @@ def lint_output(document: str, *, kind: str = "resume") -> list[dict]:
             })
 
     if kind == "cover-letter":
+        if _TO_WHOM_RE.search(prose):
+            warnings.append({
+                "code": "UNNAMED_RECIPIENT",
+                "text": "To Whom It May Concern",
+                "hint": "Reads as a mail merge. Search the company on "
+                        "LinkedIn, filter by People, and address the "
+                        "recruiter or team lead by name.",
+            })
+
+        for phrase in CONVENTIONAL_FORMULAS:
+            if phrase in lowered:
+                warnings.append({
+                    "code": "CHECK_SPECIFICITY",
+                    "text": phrase,
+                    "hint": "Conventional and fine in a European motivation "
+                            "letter, but only if the same sentence names "
+                            "something specific (a real strength, a real "
+                            "company focus, a named team). If the rest of "
+                            "the sentence would fit any employer, rewrite "
+                            "that half.",
+                })
+
         paragraphs = [
             p.strip() for p in re.split(r"\n\s*\n", prose)
             if len(p.strip().split()) >= 25
@@ -1262,6 +1365,23 @@ def _cli() -> int:
     p.add_argument("--job-dir", required=True, help="Directory holding hard-requirements.txt / preferred.txt")
     p.add_argument("--resume", required=True, help="Path to the tailored resume markdown")
     p.add_argument("--json", action="store_true", help="Emit JSON instead of human-readable text")
+
+    p = sub.add_parser(
+        "sanitize-dashes",
+        help=(
+            "Deterministic (no LLM): rewrite the file in place with every "
+            "em dash replaced (comma in prose, en dash between digits). "
+            "Prints each rewritten line so the caller can re-read it for "
+            "grammar. This is the hard guarantee behind the no-em-dash "
+            "rule, which lint-output can only warn about."
+        ),
+    )
+    p.add_argument("--input", required=True, help="Markdown file to rewrite in place")
+    p.add_argument(
+        "--check",
+        action="store_true",
+        help="Report what would change without writing (exit 1 if any em dash found)",
+    )
 
     p = sub.add_parser(
         "lint-output",
@@ -1642,6 +1762,31 @@ def _cli() -> int:
             print("No screening terms were extracted for this posting.")
         return 0
 
+    if args.command == "sanitize-dashes":
+        target = Path(args.input)
+        doc = _read_if_exists(target)
+        if doc is None:
+            print(f"FAILURE: no such file: {args.input}", file=sys.stderr)
+            return 2
+        cleaned, changes = sanitize_dashes(doc)
+        if not changes:
+            print(f"{target.name}: no em dashes")
+            return 0
+        if args.check:
+            print(f"{target.name}: {len(changes)} line(s) contain em dashes")
+            for c in changes:
+                print(f"  line {c['line']}: {c['before']}")
+            return 1
+        target.write_text(cleaned, encoding="utf-8")
+        print(f"{target.name}: rewrote {len(changes)} line(s) to remove em dashes")
+        for c in changes:
+            print(f"  line {c['line']}: {c['after']}")
+        print(
+            "Re-read the lines above. A comma occasionally lands where a "
+            "period would read better."
+        )
+        return 0
+
     if args.command == "lint-output":
         doc = _read_if_exists(Path(args.input))
         if doc is None:
@@ -1871,6 +2016,21 @@ def _cmd_build_prompt(args: argparse.Namespace) -> int:
                     file=sys.stderr,
                 )
                 return 2
+        elif var == "relocation_context":
+            # Optional. An empty string is a valid, meaningful value: it
+            # tells the cover-letter prompt to write nothing at all about
+            # visas or relocation. Only a student who filled this in during
+            # first-run setup gets that paragraph, and its contents are the
+            # ONLY facts the letter may state about work authorization.
+            config_path = cwd / ".resumasher" / "config.json"
+            config_text = _read_if_exists(config_path)
+            value = ""
+            if config_text:
+                try:
+                    value = (json.loads(config_text).get("relocation_context") or "").strip()
+                except json.JSONDecodeError:
+                    value = ""
+            kwargs[var] = value or "(none - the candidate has not provided any relocation or work-authorization context, so write nothing about visas, permits, or moving countries)"
         elif var == "today_date":
             # Pre-format today's date so the cover-letter sub-agent can't
             # invent or misformat it. LLMs are unreliable about the current

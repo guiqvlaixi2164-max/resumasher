@@ -237,7 +237,7 @@ The five kinds and their inputs:
 | `job-extractor` | `$RUN_DIR/jd.txt` | `COMPANY:`, `ROLE:`, `HARD_REQUIREMENTS:`, `PREFERRED:`, `TITLE_VARIANTS:` |
 | `company-researcher` | `--company` arg | 3-5 bullet facts with citations |
 | `tailor` | resume, cache.txt, jd.txt, keywords, config | tailored resume markdown |
-| `cover-letter` | tailored-resume, jd.txt, keywords, research, cache.txt, config | cover letter markdown |
+| `cover-letter` | tailored-resume, jd.txt, keywords, research, cache.txt, config | European-format motivation letter, 3-4 paragraphs |
 
 ---
 
@@ -283,6 +283,35 @@ questions if extraction found nothing usable (no resume, or a scanned PDF).
 `github_prompted=true` so we don't re-ask"). Other accepts a username or a
 profile URL; strip the prefix.
 
+**Relocation and work authorization** (`relocation_context`). Ask once:
+
+```
+Question: "Are you applying to jobs in a country where you're not a
+citizen? If so, the cover letter should address it in one or two
+sentences — recruiters screen out applications that leave the question
+hanging."
+  A) No, I'm applying where I already have the right to work
+  B) Yes — describe my situation in Other below
+  Other: e.g. "Non-EU citizen. Finishing an MS in Vienna, hold a
+         post-study work permit, eligible to work in Austria without
+         sponsorship. Want to stay for the CEE banking sector."
+```
+
+Store the student's answer verbatim in `relocation_context`. Option A
+stores `""`.
+
+**Write it verbatim and do not embellish it.** This string is the ONLY
+source of facts the cover letter may state about visas, permits, or
+eligibility. Never infer a work-authorization status from the student's
+nationality, their location, or the JD's country. A cover letter that
+misstates someone's right to work is not a style problem — it can cost
+them the application and waste the employer's time. If the student's
+answer is vague, store the vague version; the letter will be vague, which
+is correct.
+
+When `relocation_context` is empty, the cover-letter prompt is explicitly
+told to write nothing at all about relocation.
+
 If the student has a `config.json` from before GitHub was a field AND lacks
 `github_prompted: true`, ask the GitHub question once and rewrite the config.
 
@@ -300,7 +329,8 @@ cat > "$STUDENT_CWD/.resumasher/config.json" << 'CONFIGEOF'
   "linkedin": "...",
   "location": "...",
   "github_username": "...",
-  "github_prompted": true
+  "github_prompted": true,
+  "relocation_context": ""
 }
 CONFIGEOF
 "$RS" orchestration ensure-gitignore .
@@ -602,11 +632,28 @@ PROMPT=$("$RS" orchestration build-prompt --kind cover-letter --cwd "$STUDENT_CW
 ```
 
 The compiled prompt reads `$OUT_DIR/tailored-resume.md`, `$RUN_DIR/jd.txt`,
-`$OUT_DIR/company-research.md`, and the config contact header, and produces a
-real letter: H1 name + contact line (verbatim from config), today's date,
-company name, `**Re:** {Position}` subject, plain-text greeting, three ~300-word
-body paragraphs, `Sincerely,`, printed name. The date is pre-formatted by the
-orchestrator (`May D, YYYY`) so the model can't drift.
+`$RUN_DIR/job/keywords.txt`, `$OUT_DIR/company-research.md`,
+`.resumasher/cache.txt`, and the config (contact header + `relocation_context`).
+It produces a classic European motivation letter: H1 name + contact line
+(verbatim from config), today's date, company name, an `Attn:` hiring-contact
+line, `**Re:** {Position}` subject, named greeting, 3-4 body paragraphs,
+`Sincerely,`, printed name. The date is pre-formatted by the orchestrator
+(`May D, YYYY`) so the model can't drift.
+
+Three things about this letter differ from a generic one, and all three are
+enforced in the prompt (`scripts/prompts.py`, `cover-letter` kind):
+
+- **Paragraph 2 is a story, not a skills list.** It follows a causal chain —
+  a specific situation the candidate hit during a project or internship, the
+  conclusion they drew from it, and why that makes a specific responsibility
+  in *this* posting interesting. It must come from the resume or evidence
+  blocks; inventing an experience to make a better story is forbidden.
+- **A named recipient.** If the JD gives no contact, the letter carries an
+  `[INSERT HIRING MANAGER OR RECRUITER NAME ...]` placeholder with LinkedIn
+  lookup instructions rather than "To Whom It May Concern".
+- **A relocation sentence, only when `relocation_context` is set.** It gives
+  a concrete reason for the country or city and states work authorization
+  using *only* the facts in the config string.
 
 Save the sub-agent's text response to `$OUT_DIR/cover-letter.md` via Write or a
 quoted heredoc. Cover letters routinely contain possessives (`the company's
@@ -621,6 +668,22 @@ HEREDOC
 
 The sub-agent was told not to write files itself. If it disobeyed, ignore the
 file it wrote and use the text response from its message.
+
+**Strip em dashes — this step is mandatory, not conditional.** The prompt
+forbids them, but a prompt is a request and this requirement is absolute. Run
+the rewrite on both documents immediately after saving them:
+
+```bash
+"$RS" orchestration sanitize-dashes --input "$OUT_DIR/cover-letter.md"
+"$RS" orchestration sanitize-dashes --input "$OUT_DIR/tailored-resume.md"
+```
+
+It replaces each em dash with a comma (or an en dash between digits, where the
+dash was a numeric range) and prints every line it rewrote. **Read those lines
+back.** A comma occasionally lands where a period would have read better; fix
+those with the Edit tool. Do not skip the re-read, and do not skip the command
+because the letter "looks fine" — you cannot reliably spot an em dash by
+eye in a terminal.
 
 **Retry budget:** 1 retry. On second failure write a stub and continue — the
 student still gets the resume:
@@ -677,7 +740,15 @@ echo "--- resume check ---"
 
 echo "--- cover letter check ---"
 "$RS" orchestration lint-output --input "$OUT_DIR/cover-letter.md" --kind cover-letter
+
+echo "--- em dash guarantee (must report zero) ---"
+"$RS" orchestration sanitize-dashes --input "$OUT_DIR/cover-letter.md" --check
+"$RS" orchestration sanitize-dashes --input "$OUT_DIR/tailored-resume.md" --check
 ```
+
+`--check` reports without rewriting and exits 1 if it finds anything. After
+Phase 5's mandatory sanitize pass, both should print "no em dashes". If either
+does not, the sanitize step was skipped — run it without `--check` now.
 
 `keyword-coverage` reports which of the JD's required and preferred terms
 appear in the tailored resume. **A missing term is not automatically a bug.**

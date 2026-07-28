@@ -826,9 +826,16 @@ on its own line and nothing else.
 
 
 COVER_LETTER_PROMPT = """\
-Write a one-page cover letter for the candidate applying to the role below.
-Target: ~300 words across 3 body paragraphs, plus the structural elements
-listed under "Output structure" below.
+Write a one-page motivation letter (cover letter) for the candidate applying
+to the role below, in the classic European format. Target 300-400 words
+across 3-4 short body paragraphs, plus the structural elements listed under
+"Output structure".
+
+The letter has to connect the candidate's background to the employer's
+goals. Its second paragraph carries a short first-person story with a
+causal chain, which is the part that makes a letter read as written by a
+person rather than assembled from a template. Read the whole prompt before
+drafting.
 
 Candidate's pre-formatted header (this is two lines: an H1 with the
 candidate's name, then a contact line). Copy these two lines VERBATIM
@@ -878,93 +885,223 @@ single blank line between each block:
 1. The candidate's pre-formatted header — copy the two lines from
    HEADER_BEGIN/END verbatim.
 2. Today's date on a single line (the value from "Today's date" above).
-3. The company's name on a single line. Take the company name from the
-   JD or company research. Do NOT include a street address. Do NOT
-   include a city or country. Do NOT include a recipient name unless
-   one is explicitly given in the JD.
-4. A subject line of the form "**Re:** {Position Title}" — the position
+3. The company's name on a single line. Do NOT include a street address,
+   city, or country.
+4. The hiring contact, on the line directly below the company name, when
+   the JD names one ("Attn: Maria Gruber, Talent Acquisition"). If the JD
+   names nobody, emit this line exactly:
+       Attn: [INSERT HIRING MANAGER OR RECRUITER NAME - search the
+       company on LinkedIn, filter by "People", look for HR / Talent
+       Acquisition / the team lead for this role]
+   A named recipient measurably outperforms an unnamed one, and the
+   student can find it in about two minutes. Never write "To Whom It May
+   Concern" — it reads as a mail merge.
+5. A subject line of the form "**Re:** {Position Title}" — the position
    title must come from the JD; use the JD's exact phrasing.
-5. A greeting on its own line. Plain text, no leading "#" or other
-   markdown heading. Use a named recipient if the JD gives one
-   ("Dear Ms. Okonjo,"). Otherwise "Dear Hiring Team," or
-   "Dear {Company} Hiring Team," — pick one, don't agonize.
-6. **Two to four body paragraphs** (see "Shape" below).
-7. The closing word on its own line: "Sincerely,"
-8. The candidate's full name on its own line — copy the name verbatim
+6. A greeting on its own line. Plain text, no leading "#" or other
+   markdown heading. "Dear Ms. Gruber," when the JD gave a name. When it
+   did not, "Dear [INSERT NAME]," so the student fills the same value
+   they looked up for the Attn line. Fall back to "Dear Hiring Team,"
+   only if the company genuinely publishes no names anywhere.
+7. **Three to four body paragraphs** (see "Shape" below).
+8. The closing word on its own line: "Sincerely,"
+9. The candidate's full name on its own line — copy the name verbatim
    from the H1 in the header above (the text after "# ").
 
 Do not include a street address (yours or the company's). Do not include
 a return-address block. Do not include a phone or email line beyond the
 contact line that already appears inside the header. Do not insert a
-signature image. The student can add any of those by editing the
-markdown afterward.
+signature image.
 
-## Shape — read this before drafting
+## What the letter has to answer
 
-Recruiters report that the thing that marks a letter as machine-written
-is not any single word. It is that it has the same skeleton as the two
-hundred others in the stack: three paragraphs of near-identical length,
-the same intent-declaring opening, the same "I would welcome the
-opportunity to discuss" close. Do not produce that skeleton.
+Three questions, in this order. If a reader finishes the letter unable to
+answer any one of them, the letter failed.
 
-**Let the evidence decide the paragraph count.** Two paragraphs is
-correct when the candidate has one overwhelming piece of relevant
-evidence. Four is correct when there is a genuine career-change story to
-explain. Three is fine when three is what the material wants. Do not pad
-to reach a count, and do not compress two distinct points into one
-paragraph to hit one.
+    Why this company?   Why this role?   Why you?
 
-**Vary paragraph length deliberately.** A short paragraph — two
-sentences, forty words — lands harder than a long one, and the contrast
-is what makes it read as written rather than generated.
+## Shape
 
-**The opening sentence must lead with a fact, not an intention.** This
-is the single highest-signal line in the document.
+**Three to four short paragraphs. One page maximum.** Target 300-400
+words of body text.
 
-    BANNED openings (every one of these marks the letter as templated):
-      "I am writing to express my interest in..."
-      "I am excited to apply for..."
-      "I was thrilled to see your posting for..."
-      "As a passionate [X] with N years of experience..."
-      "I am reaching out regarding..."
-      "Please accept this letter as my application for..."
+**Vary paragraph length deliberately.** A short paragraph of two
+sentences lands harder than a long one, and the contrast is what makes
+the letter read as written rather than generated. Do not produce three
+paragraphs of near-identical length. That shape is the single thing
+recruiters name when asked how they spot a templated letter.
 
-    GOOD openings lead on something concrete:
-      "Your posting asks for someone who can take demand forecasting
-       from a notebook to production. I did that at Ingram last year,
-       on 2.3M rows of transaction data."
-      "I spent the last eighteen months building the exact system your
-       Data Platform team is now hiring for."
-      "Three of the four tools in your requirements list are what I
-       used daily at Novartis. The fourth I taught myself in March."
+### Paragraph 1 — the opening
 
-Name the role and company by the end of the first paragraph, so the
-reader knows what they are holding. Just don't open with it.
+State the role you are applying for and connect it to something real in
+one sentence. This form is correct and expected in European motivation
+letters:
 
-## Content
+    "I am writing to apply for the Financial Analyst position at Erste
+     Bank, where my background in data-driven finance aligns with your
+     focus on sustainable investment."
 
-- **Paragraph 1** — the hook, plus what role and what company. Connect
-  to something specific and recent from the company research. Not "your
-  company's impressive growth"; the actual thing, by name, with the
-  detail that makes it clear you read it.
-- **Middle paragraph(s)** — the strongest one or two pieces of evidence
-  from the resume that answer the JD's top requirements. Use the real
-  metrics. Name the tools using the JD's exact spelling from the
-  JD_KEYWORDS block (the same string-matching rules apply here as on
-  the resume). One story told properly beats four claims listed.
-- **Final paragraph** — short. What the candidate wants and a plain
-  close. Skip "I would welcome the opportunity to discuss how my skills
-  can contribute to your team's continued success." Try: "I'd be glad
-  to walk through the forecasting work in more detail."
+**The second half of that sentence is what makes it work.** The clause
+after the comma has to name something specific and true: a real strength
+of the candidate's, tied to a real focus of the company's that you found
+in the company research. Without it, the sentence is a mail merge.
 
-Every paragraph must contain at least one fact that could only have come
-from THIS candidate applying to THIS company. A sentence that would
-survive a find-and-replace of the company name is a sentence to cut.
+    WEAK (says nothing, could be any applicant to any employer):
+      "I am writing to apply for the Financial Analyst position at Erste
+       Bank. I believe I would be a great fit for your team."
 
-## Length
+    STRONG (names a real thing on both sides):
+      "I am writing to apply for the Financial Analyst position at Erste
+       Bank, where my background in data-driven finance aligns with your
+       focus on sustainable investment."
 
-Target 250-350 words of body text. A letter that runs past one page gets
-skimmed, and a letter under 150 words reads as indifferent.
+Never open with "I am excited to apply", "I was thrilled to see your
+posting", or "As a passionate professional with N years of experience".
+
+### Paragraph 2 — the story (THE MOST IMPORTANT PARAGRAPH)
+
+This paragraph is what separates a letter someone wrote from a letter
+something generated. It is not a list of skills. It is a short story with
+a causal chain, told in this shape:
+
+    I encountered [specific situation] during [research / internship /
+    project],
+    which showed me [specific conclusion drawn],
+    which is why [specific task or responsibility in THIS job posting]
+    interests me.
+
+Work backwards to build it. Pick one responsibility from the JD. Find the
+moment in the candidate's EVIDENCE or resume where they ran into the
+problem that responsibility exists to solve. Tell that moment, then draw
+the line to the posting.
+
+    EXAMPLE (built from a real capstone in the evidence block):
+      "During my capstone I spent three weeks reconciling sales data
+       across four regional systems that each defined 'active customer'
+       differently. The forecasting model was never the hard part. The
+       definitions were. That experience is why the data-governance side
+       of this role interests me as much as the modelling side, and why
+       your posting's emphasis on a single source of truth caught my
+       attention."
+
+Note the shape of that example: a concrete situation with a number in it,
+a conclusion that sounds like a person figured something out, and a
+specific link to a specific line of the posting. Note also the short
+sentence in the middle. That is what a human paragraph sounds like.
+
+Rules for the story:
+- It must come from the RESUME or EVIDENCE blocks. Do not invent an
+  experience to make a better story. If the evidence is thin, tell a
+  smaller true story rather than a larger false one.
+- Name the specific thing: the tool, the number, the dataset, the
+  stakeholder. Vague stories are worse than no story.
+- The conclusion must be an actual opinion or insight, not a platitude.
+  "I learned the importance of teamwork" is not a conclusion.
+
+### Paragraph 3 — evidence and company knowledge
+
+Link the candidate's strongest one or two pieces of evidence to the JD's
+top requirements, using the real metrics from the resume. Name tools with
+the JD's exact spelling from the JD_KEYWORDS block, since the same
+string-matching applies here as on the resume.
+
+Then show you know the company: a product, a market, a mission, a recent
+development from the company research. Name it. "Your recent expansion
+into ESG reporting" beats "your impressive market position" because only
+one of them proves the letter was written for this employer.
+
+### Paragraph 4 (optional) — relocation, if it applies
+
+Include this ONLY when the RELOCATION_CONTEXT block below is non-empty.
+It can also be folded into paragraph 3 as one or two sentences rather
+than standing alone.
+
+<<<RELOCATION_CONTEXT_BEGIN>>>
+{relocation_context}
+<<<RELOCATION_CONTEXT_END>>>
+
+If that block is empty, skip this entirely and write no sentence about
+visas, permits, or relocation.
+
+When it is non-empty, the candidate is applying from outside the
+employer's country, and a recruiter's first unspoken question is "will
+this person actually come, and will they stay?" An unanswered question
+becomes a rejection. Answer it in one or two plain sentences:
+
+1. **A concrete reason for THIS country or city** — tied to its industry,
+   its market, its institutions, or an existing connection the candidate
+   already has. Specific and checkable.
+2. **A factual note on work authorization**, stated plainly and without
+   apology, using only the facts in the RELOCATION_CONTEXT block.
+
+    GOOD (specific, verifiable, forward-looking):
+      "I moved to Vienna for my master's in Business Analytics and want
+       to build my career here, where the CEE banking sector gives a
+       data analyst a market this concentrated and this international.
+       I hold a post-study work permit and am eligible to work in
+       Austria without employer sponsorship."
+
+    WEAK (reads as tourism, gives a recruiter nothing to act on):
+      "I have always loved European culture and would welcome the
+       chance to experience life in Austria."
+
+Rules for this paragraph:
+- **Never state a permit, visa, or eligibility status that is not
+  written in the RELOCATION_CONTEXT block.** Getting work authorization
+  wrong on an application is not a style problem. Say only what the
+  block says, in the block's own terms.
+- Give a reason grounded in the work, the industry, or a real existing
+  tie. Not the weather, not the food, not "quality of life", not
+  "European culture". Recruiters read those as relocation for its own
+  sake, which is the thing they screen against.
+- Signal duration. "Build my career here" answers the real question.
+- Do not apologize, do not over-explain, and do not lead the letter
+  with this. It is a fact to settle, not the argument for hiring.
+
+### Final paragraph — the close
+
+Reaffirm motivation and open the door. This form is correct and expected:
+
+    "I would welcome the opportunity to discuss how my background in
+     financial modeling can support Erste's ESG data analytics team."
+
+As with the opening, the specificity is what saves it. Name the actual
+skill and the actual team. "I would welcome the opportunity to discuss
+how my skills can contribute to your team's continued success" names
+neither and reads as filler.
+
+## Tone
+
+Professional and warm. Confident about what the candidate has done,
+modest about what they would do next.
+
+    PHRASES THAT WORK:
+      "I enjoy collaborating across finance and data teams to deliver
+       analytical insights."
+      "I appreciate working in structured environments where precision
+       and reliability are valued."
+      "My experience enables me to contribute to improving..."
+
+    OVERCLAIMING - never write these:
+      "I am the best fit for this role."
+      "I will revolutionize your processes."
+      "I am confident I will exceed your expectations."
+      "I am the ideal candidate."
+
+The distinction: describe capability and let the reader draw the
+conclusion. "My experience enables me to contribute to improving your
+reconciliation workflow" is a claim you can support. "I will transform
+your reconciliation workflow" is a promise you cannot.
+
+Use simple language. Short words, concrete nouns, plain sentences. A
+letter that sounds like a person explaining their work beats one that
+sounds like a consultancy brochure.
+
+## Every paragraph must earn its place
+
+Each one needs at least one fact that could only have come from THIS
+candidate applying to THIS employer. A sentence that would survive a
+find-and-replace of the company name is a sentence to cut.
 
 """ + HUMAN_VOICE_RULES + """
 TOOL USAGE CONSTRAINTS. You have access to multiple tools (Bash, Read,
@@ -1030,6 +1167,7 @@ PROMPT_KINDS: dict[str, PromptSpec] = {
             "jd_keywords",
             "company_research",
             "folder_summary",
+            "relocation_context",
         ),
     ),
 }
@@ -1077,6 +1215,7 @@ def build_prompt(
     company: Optional[str] = None,
     company_research: Optional[str] = None,
     jd_keywords: Optional[str] = None,
+    relocation_context: Optional[str] = None,
     tailored_resume: Optional[str] = None,
     contact_info: Optional[str] = None,
     today_date: Optional[str] = None,
@@ -1103,6 +1242,7 @@ def build_prompt(
         "company": company,
         "company_research": company_research,
         "jd_keywords": jd_keywords,
+        "relocation_context": relocation_context,
         "tailored_resume": tailored_resume,
         "contact_info": contact_info,
         "today_date": today_date,

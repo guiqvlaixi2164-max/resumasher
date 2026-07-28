@@ -78,6 +78,7 @@ def test_cover_letter_substitutes_all_required_vars():
         jd_keywords="KEYWORDS_MARKER",
         company_research="RESEARCH_MARKER",
         folder_summary="EVIDENCE_MARKER",
+        relocation_context="",
     )
     assert "Eduardo" in p
     assert "May 2, 2026" in p
@@ -127,10 +128,13 @@ def test_cover_letter_preserves_schema_literals():
         jd_keywords="K",
         company_research="C",
         folder_summary="E",
+        relocation_context="",
     )
-    # Greeting and Re: template markers must survive untouched as
-    # instructions to the downstream LLM.
-    assert "{Company}" in p
+    # The Re: subject marker must survive untouched as an instruction to
+    # the downstream LLM. (The greeting no longer carries a {Company}
+    # literal: the letter now addresses a named recipient, so the greeting
+    # is either "Dear Ms. Gruber," from the JD or an [INSERT NAME]
+    # placeholder the student fills from LinkedIn.)
     assert "{Position Title}" in p
 
 
@@ -158,6 +162,7 @@ KIND_FIXTURES: dict[str, dict[str, str]] = {
         "jd_keywords": "K",
         "company_research": "C",
         "folder_summary": "E",
+        "relocation_context": "",
     },
 }
 
