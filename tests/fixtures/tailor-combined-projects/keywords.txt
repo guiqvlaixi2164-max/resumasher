@@ -1,0 +1,10 @@
+HARD REQUIREMENTS (use these exact spellings when the candidate's evidence supports the term):
+  - Python
+  - GitHub Actions
+  - continuous integration (CI)
+
+PREFERRED:
+  - Docker
+
+ROLE TITLE AS THE JD WRITES IT:
+  - Developer Tools Engineer

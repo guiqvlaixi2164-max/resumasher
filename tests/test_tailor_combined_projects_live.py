@@ -83,6 +83,7 @@ def _build_tailor_prompt() -> str:
         resume_text=(FIXTURES / "resume.md").read_text(encoding="utf-8"),
         folder_summary=(FIXTURES / "cache.txt").read_text(encoding="utf-8"),
         jd_text=(FIXTURES / "jd.txt").read_text(encoding="utf-8"),
+        jd_keywords=(FIXTURES / "keywords.txt").read_text(encoding="utf-8"),
     )
 
 

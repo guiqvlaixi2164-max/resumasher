@@ -234,10 +234,10 @@ The five kinds and their inputs:
 | Kind | Reads | Output |
 |---|---|---|
 | `folder-miner` | `$RUN_DIR/context.txt` | prose summary → save to `.resumasher/cache.txt` |
-| `job-extractor` | `$RUN_DIR/jd.txt` | two lines: `COMPANY:` and `ROLE:` |
+| `job-extractor` | `$RUN_DIR/jd.txt` | `COMPANY:`, `ROLE:`, `HARD_REQUIREMENTS:`, `PREFERRED:`, `TITLE_VARIANTS:` |
 | `company-researcher` | `--company` arg | 3-5 bullet facts with citations |
-| `tailor` | resume, cache.txt, jd.txt, config | tailored resume markdown |
-| `cover-letter` | tailored-resume, jd.txt, research, config | 3-paragraph cover letter |
+| `tailor` | resume, cache.txt, jd.txt, keywords, config | tailored resume markdown |
+| `cover-letter` | tailored-resume, jd.txt, keywords, research, cache.txt, config | cover letter markdown |
 
 ---
 
@@ -466,9 +466,10 @@ doesn't go through a shell at all, so there's no quoting hazard. **Avoid**
 
 ### Phase 3 — Company + role, research, output dir
 
-**Extract the company and role.** Dispatch the `job-extractor` sub-agent — it
-reads only the JD and returns two lines. Cheap, and its output names the
-output directory:
+**Extract the company, role, and screening terms.** Dispatch the
+`job-extractor` sub-agent — it reads only the JD and returns five lines.
+Cheap, and its output does double duty: it names the output directory AND
+supplies the exact keyword surface forms the tailor and cover-letter need:
 
 ```bash
 PROMPT=$("$RS" orchestration build-prompt --kind job-extractor --cwd "$STUDENT_CWD")
@@ -476,8 +477,10 @@ PROMPT=$("$RS" orchestration build-prompt --kind job-extractor --cwd "$STUDENT_C
 
 **Pipe the response through `extract-job-fields`** — do NOT write the per-field
 files manually with `echo`. The extractor handles markdown-bold variants
-(`**ROLE:** Data Analyst`) that a hand-written `grep` misses, and the per-field
-files let later Bash calls read values back without shell-source hazards:
+(`**ROLE:** Data Analyst`) that a hand-written `grep` misses, splits the
+pipe-separated term lists correctly (requirement strings contain commas, so a
+comma split would shred them), and the per-field files let later Bash calls
+read values back without shell-source hazards:
 
 ```bash
 mkdir -p "$RUN_DIR/job"
@@ -486,6 +489,19 @@ echo "$EXTRACTOR_OUTPUT" | "$RS" orchestration extract-job-fields --output-dir "
 COMPANY=$(cat "$RUN_DIR/job/company.txt")
 ROLE=$(cat "$RUN_DIR/job/role.txt")
 ```
+
+That writes `company.txt`, `role.txt`, `hard-requirements.txt`,
+`preferred.txt`, `title-variants.txt`, and `keywords.txt`. **`keywords.txt` is
+load-bearing** — `build-prompt` reads it for the `jd_keywords` variable in both
+the tailor and cover-letter kinds, and those builds exit 2 without it.
+
+Why this exists: applicant tracking systems parse the resume into structured
+fields and match them against the requisition string by string. Some enterprise
+configurations score an acronym and its expansion as two unrelated skills, so a
+resume saying "AWS" can score zero against a posting asking for "Amazon Web
+Services." Extracting the JD's exact surface forms once, up front, lets the
+tailor spell matched terms the way the screener expects instead of guessing
+mid-rewrite.
 
 **Do NOT improvise an env-file heredoc + `source` pattern.** Unquoted
 `COMPANY=Elevation Capital` on its own line, then `. job.env`, makes bash parse
@@ -645,6 +661,38 @@ EOF
 )"
 ```
 
+**Run the two deterministic checks.** Both are pure Python — no LLM, no
+sub-agent, no token cost. Run them and put their output in the summary
+verbatim; do not paraphrase, and do not decide on the student's behalf which
+findings matter.
+
+```bash
+echo "--- screening term coverage ---"
+"$RS" orchestration keyword-coverage \
+    --job-dir "$RUN_DIR/job" \
+    --resume "$OUT_DIR/tailored-resume.md"
+
+echo "--- resume check ---"
+"$RS" orchestration lint-output --input "$OUT_DIR/tailored-resume.md" --kind resume
+
+echo "--- cover letter check ---"
+"$RS" orchestration lint-output --input "$OUT_DIR/cover-letter.md" --kind cover-letter
+```
+
+`keyword-coverage` reports which of the JD's required and preferred terms
+appear in the tailored resume. **A missing term is not automatically a bug.**
+It is missing for one of two reasons: the candidate genuinely lacks that
+experience (correct — the anchoring rule forbids inventing it, and no amount of
+keyword coverage is worth a fabricated bullet), or the tailor described real
+experience using different words (fixable, and worth telling the student). Say
+which you think it is for each missing term, and never suggest adding a term
+the evidence doesn't support.
+
+`lint-output` flags unresolved `[INSERT ...]` placeholders, leftover
+`<!--SOFT: ...-->` comments, em dashes, and phrasing recruiters report as
+machine-written. All warnings, never blocking — some flagged words are the
+right word in context, and that call belongs to the student.
+
 **Count the remaining placeholders** so the summary can point at them:
 
 ```bash
@@ -674,7 +722,15 @@ Output:  {out_dir}
   ✓ tailored-resume.md
   ✓ cover-letter.md
   ✓ jd.md (the posting, for your records)
+
+Screening terms: {matched}/{total} of the posting's required terms appear
+in your resume.
 ```
+
+Then list any missing terms with your read on each — "you don't have this"
+versus "you have this, it's just worded differently, here's the line to
+change." If `lint-output` returned findings, list them under a short heading
+and say plainly that they're suggestions.
 
 If `PH_RESUME > 0` or `PH_COVER > 0`, add:
 
@@ -685,7 +741,9 @@ If `PH_RESUME > 0` or `PH_COVER > 0`, add:
      • fill in the real number and delete the SOFT comment
      • delete the [INSERT] version and keep the SOFT text
      • drop the bullet entirely
-   Don't ship a resume with "[INSERT" still in it.
+   Don't ship a resume with "[INSERT" still in it — and delete the
+   <!--SOFT: ...--> comments too. They're invisible in a markdown
+   preview but paste into Word as visible text.
 ```
 
 Then:

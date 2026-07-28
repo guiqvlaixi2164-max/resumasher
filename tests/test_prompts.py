@@ -56,6 +56,7 @@ def test_tailor_substitutes_all_four():
         resume_text="RESUME_MARKER",
         folder_summary="EVIDENCE_MARKER",
         jd_text="JD_MARKER",
+        jd_keywords="KEYWORDS_MARKER",
     )
     assert "CONTACT_MARKER" in p
     assert "RESUME_MARKER" in p
@@ -74,7 +75,9 @@ def test_cover_letter_substitutes_all_required_vars():
         today_date="May 2, 2026",
         tailored_resume="TAILORED_MARKER",
         jd_text="JD_MARKER",
+        jd_keywords="KEYWORDS_MARKER",
         company_research="RESEARCH_MARKER",
+        folder_summary="EVIDENCE_MARKER",
     )
     assert "Eduardo" in p
     assert "May 2, 2026" in p
@@ -107,6 +110,7 @@ def test_tailor_preserves_schema_literals():
         resume_text="R",
         folder_summary="E",
         jd_text="J",
+        jd_keywords="K",
     )
     # These must survive untouched — they're LLM output schema markers.
     for literal in ("{Full Name}", "{Title}", "{Company}", "{Degree}", "{Institution}"):
@@ -120,7 +124,9 @@ def test_cover_letter_preserves_schema_literals():
         today_date="May 2, 2026",
         tailored_resume="R",
         jd_text="J",
+        jd_keywords="K",
         company_research="C",
+        folder_summary="E",
     )
     # Greeting and Re: template markers must survive untouched as
     # instructions to the downstream LLM.
@@ -142,13 +148,16 @@ KIND_FIXTURES: dict[str, dict[str, str]] = {
         "resume_text": "R",
         "folder_summary": "E",
         "jd_text": "J",
+        "jd_keywords": "K",
     },
     "cover-letter": {
         "contact_info": "# Test\nt@x.com",
         "today_date": "May 2, 2026",
         "tailored_resume": "R",
         "jd_text": "J",
+        "jd_keywords": "K",
         "company_research": "C",
+        "folder_summary": "E",
     },
 }
 
@@ -197,6 +206,7 @@ def test_tailor_without_contact_info_raises():
             resume_text="R",
             folder_summary="E",
             jd_text="J",
+        jd_keywords="x",
         )
 
 
@@ -389,6 +399,12 @@ def skill_tree(tmp_path: Path) -> Path:
     (run / "context.txt").write_text("CONTEXT_FILE_CONTENT", encoding="utf-8")
     (run / "jd.txt").write_text("JD_FILE_CONTENT", encoding="utf-8")
 
+    job = run / "job"
+    job.mkdir()
+    (job / "hard-requirements.txt").write_text("Power BI\nSQL\n", encoding="utf-8")
+    (job / "preferred.txt").write_text("Airflow\n", encoding="utf-8")
+    (job / "keywords.txt").write_text("KEYWORDS_FILE_CONTENT", encoding="utf-8")
+
     cache = tmp_path / ".resumasher" / "cache.txt"
     cache.write_text("CACHE_FILE_CONTENT", encoding="utf-8")
 
@@ -542,6 +558,7 @@ def test_tailor_prompt_explicitly_requires_one_project_per_h3():
         resume_text="x",
         folder_summary="y",
         jd_text="z",
+        jd_keywords="x",
     )
     # The rule heading appears verbatim in the rendered prompt.
     assert "One project per H3 heading" in p, (
@@ -561,6 +578,7 @@ def test_tailor_prompt_lists_concrete_combiner_examples_to_avoid():
         resume_text="x",
         folder_summary="y",
         jd_text="z",
+        jd_keywords="x",
     )
     # The rule explicitly names at least the `+` combiner (the shape
     # Eduardo's run produced) so the LLM has a concrete negative
@@ -581,6 +599,7 @@ def test_tailor_prompt_says_emit_two_separate_blocks_instead():
         resume_text="x",
         folder_summary="y",
         jd_text="z",
+        jd_keywords="x",
     )
     assert "two separate" in p and "###" in p, (
         "Tailor prompt rule must prescribe emitting separate ### blocks. "
@@ -599,6 +618,7 @@ def test_tailor_prompt_schema_block_annotates_one_project_per_heading():
         resume_text="x",
         folder_summary="y",
         jd_text="z",
+        jd_keywords="x",
     )
     # Look for the H3 schema line followed by the ONE-per-heading
     # annotation. The exact spacing isn't asserted (template comments

@@ -46,6 +46,9 @@ def _setup_minimal_skill_tree(root: Path) -> None:
     (run / "resume.txt").write_text("RESUME_FILE_CONTENT", encoding="utf-8")
     (run / "context.txt").write_text("CONTEXT_FILE_CONTENT", encoding="utf-8")
     (run / "jd.txt").write_text("JD_FILE_CONTENT", encoding="utf-8")
+    job = run / "job"
+    job.mkdir()
+    (job / "keywords.txt").write_text("KEYWORDS_FILE_CONTENT", encoding="utf-8")
     (root / ".resumasher" / "cache.txt").write_text(
         "CACHE_FILE_CONTENT", encoding="utf-8"
     )

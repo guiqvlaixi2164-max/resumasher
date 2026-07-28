@@ -20,6 +20,8 @@ CLI map:
     python -m scripts.orchestration extract-company <<< "prose with COMPANY: Deloitte line"
     python -m scripts.orchestration extract-role <<< "prose with ROLE: Data Analyst line"
     python -m scripts.orchestration extract-job-fields --output-dir <dir>
+    python -m scripts.orchestration keyword-coverage --job-dir <dir> --resume <path>
+    python -m scripts.orchestration lint-output --input <path> --kind cover-letter
     python -m scripts.orchestration is-failure <<< "FAILURE: reason"       (exit 0 = yes)
     python -m scripts.orchestration append-history <cwd> <json-line>
     python -m scripts.orchestration first-run-needed <cwd>
@@ -741,6 +743,320 @@ def is_failure_sentinel(prose: str) -> bool:
     return False
 
 
+# The job-extractor emits pipe-separated term lists. Commas are NOT the
+# separator: real requirement strings contain them ("Analyst, Commercial
+# Data", "R, Python"), so a comma split would shred them.
+_HARD_REQ_RE = re.compile(r"^[\s*]*HARD_REQUIREMENTS[\s*]*:[\s*]*(.+?)[\s*]*$", re.MULTILINE | re.IGNORECASE)
+_PREFERRED_RE = re.compile(r"^[\s*]*PREFERRED[\s*]*:[\s*]*(.+?)[\s*]*$", re.MULTILINE | re.IGNORECASE)
+_TITLE_VARIANTS_RE = re.compile(r"^[\s*]*TITLE_VARIANTS[\s*]*:[\s*]*(.+?)[\s*]*$", re.MULTILINE | re.IGNORECASE)
+
+# Sentinels the LLM emits for "this list is empty". Compared case-folded.
+_EMPTY_LIST_VALUES = frozenset({"none", "n/a", "na", "unknown", "-", ""})
+
+
+def _split_terms(raw: Optional[str]) -> list[str]:
+    """Split a pipe-separated term list into clean terms, order preserved.
+
+    Drops empties, strips markdown bullet/bold residue, de-duplicates
+    case-insensitively while keeping the first-seen surface form (which is
+    the JD's own spelling — the whole point of the extraction).
+    """
+    if raw is None:
+        return []
+    if raw.strip().lower() in _EMPTY_LIST_VALUES:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for chunk in raw.split("|"):
+        term = chunk.strip().strip("*_`").strip()
+        term = term.lstrip("-• ").strip()
+        if not term or term.lower() in _EMPTY_LIST_VALUES:
+            continue
+        key = term.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(term)
+    return out
+
+
+def extract_hard_requirements(prose: str) -> list[str]:
+    """Terms from the HARD_REQUIREMENTS line, in the JD's surface form."""
+    match = _HARD_REQ_RE.search(prose)
+    return _split_terms(match.group(1) if match else None)
+
+
+def extract_preferred(prose: str) -> list[str]:
+    """Terms from the PREFERRED line, in the JD's surface form."""
+    match = _PREFERRED_RE.search(prose)
+    return _split_terms(match.group(1) if match else None)
+
+
+def extract_title_variants(prose: str) -> list[str]:
+    """Role-title spellings the JD uses."""
+    match = _TITLE_VARIANTS_RE.search(prose)
+    return _split_terms(match.group(1) if match else None)
+
+
+def render_jd_keywords(
+    hard: list[str], preferred: list[str], titles: list[str]
+) -> str:
+    """Render the extracted terms as the `jd_keywords` prompt variable.
+
+    Plain labelled lines rather than JSON: the sub-agent reads this as
+    guidance, and a bulleted block is easier for a model to follow than a
+    nested object. Empty sections say so explicitly instead of vanishing,
+    so a model that sees "PREFERRED: (none listed)" doesn't go hunting for
+    a section that was silently omitted.
+    """
+    def _fmt(label: str, terms: list[str]) -> str:
+        if not terms:
+            return f"{label}: (none listed)"
+        return f"{label}:\n" + "\n".join(f"  - {t}" for t in terms)
+
+    return "\n".join([
+        _fmt("HARD REQUIREMENTS (use these exact spellings when the "
+             "candidate's evidence supports the term)", hard),
+        "",
+        _fmt("PREFERRED", preferred),
+        "",
+        _fmt("ROLE TITLE AS THE JD WRITES IT", titles),
+    ])
+
+
+# ---------------------------------------------------------------------------
+# 6.5 keyword_coverage: which JD terms made it into the tailored resume
+# ---------------------------------------------------------------------------
+#
+# Deterministic, no LLM. The student gets an honest list of what the
+# screening layer will and won't find. Missing terms are NOT automatically
+# a defect: a term is missing either because the candidate genuinely lacks
+# that experience (correct, and the anchoring rule forbids inventing it) or
+# because the tailor phrased it differently (fixable, and worth surfacing).
+# We report; the student decides.
+
+
+def _normalize_for_match(text: str) -> str:
+    """Casefold and collapse punctuation/whitespace so surface variants match.
+
+    'Power BI' / 'power  bi' / 'Power-BI' all normalize to 'power bi'.
+    Deliberately does NOT strip the internal structure of things like
+    'A/B testing' beyond turning the slash into a space, because that is
+    how a term written 'A/B' vs 'A B' should still land.
+    """
+    text = text.casefold()
+    text = re.sub(r"[^\w\s]+", " ", text, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _acronym_forms(term: str) -> list[str]:
+    """Return the match candidates for a term.
+
+    For 'Natural Language Processing (NLP)' this yields the full string,
+    the expansion alone, and the acronym alone — a resume matching ANY of
+    the three has satisfied the requirement, since the parenthetical is
+    the JD's own way of saying "these are the same thing."
+    """
+    forms = [term]
+    m = re.match(r"^(.*?)\s*\(([^)]+)\)\s*$", term)
+    if m:
+        outer, inner = m.group(1).strip(), m.group(2).strip()
+        if outer:
+            forms.append(outer)
+        if inner:
+            forms.append(inner)
+    return forms
+
+
+def keyword_coverage(terms: list[str], document: str) -> dict:
+    """Report which `terms` appear in `document`.
+
+    Substring match on the normalized forms. Substring rather than
+    token-boundary matching because requirement terms are frequently
+    multi-word phrases embedded mid-bullet, and a boundary regex per term
+    would cost more than it buys at this list size (<=30 terms).
+    """
+    haystack = _normalize_for_match(document)
+    matched: list[str] = []
+    missing: list[str] = []
+    for term in terms:
+        forms = [_normalize_for_match(f) for f in _acronym_forms(term)]
+        if any(f and f in haystack for f in forms):
+            matched.append(term)
+        else:
+            missing.append(term)
+    total = len(terms)
+    return {
+        "total": total,
+        "matched": matched,
+        "missing": missing,
+        "matched_count": len(matched),
+        "missing_count": len(missing),
+        # Percent is reported for the student's intuition only. It is NOT
+        # the ATS score — real systems weight terms unequally and read
+        # context. Treat it as "how much of the vocabulary is present."
+        "percent": round(100.0 * len(matched) / total, 1) if total else 0.0,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 6.6 lint_output: catch machine-written tells and unresolved markup
+# ---------------------------------------------------------------------------
+#
+# Deterministic, no LLM. Two jobs:
+#
+#   1. Unresolved authoring markup that must never reach a recruiter.
+#      `[INSERT ...]` is obvious. `<!--SOFT: ...-->` is the sneaky one:
+#      HTML comments are invisible in a markdown preview but paste into
+#      Word as literal visible text, so a student who skips the edit step
+#      ships a resume with the annotation printed in it.
+#
+#   2. Phrases and punctuation that recruiters report as machine-written
+#      tells. The prompts already forbid these (prompts.py
+#      HUMAN_VOICE_RULES); this is the belt to that suspenders, because a
+#      weaker model will emit them regardless of instruction.
+#
+# Findings are WARNINGS, never errors. The student decides — some of these
+# are legitimately the right word in context, and a linter that blocks on
+# style would be worse than one that informs.
+
+# Keep in sync with HUMAN_VOICE_RULES in scripts/prompts.py.
+AI_TELL_PHRASES: tuple[str, ...] = (
+    # Cover-letter openings that mark a letter as templated
+    "i am writing to express",
+    "i am writing to apply",
+    "i am excited to apply",
+    "i was thrilled to see",
+    "please accept this letter",
+    "i am reaching out regarding",
+    "i would welcome the opportunity to discuss",
+    # Empty self-description
+    "results-driven", "results-oriented", "detail-oriented", "self-starter",
+    "go-getter", "team player", "hardworking", "highly motivated",
+    "proven track record", "track record of success", "thought leader",
+    "hit the ground running", "wear many hats", "dynamic professional",
+    # Machine-written vocabulary
+    "delve", "seamless", "tapestry", "cutting-edge", "state-of-the-art",
+    "best-in-class", "world-class", "game-changer", "synergy", "synergize",
+    "spearheaded", "pivotal", "myriad", "plethora", "testament to",
+    # Constructions
+    "not just", "more than just", "in conclusion",
+    "moreover,", "furthermore,",
+)
+
+_EM_DASH_RE = re.compile(r"[—]")
+# En dash flagged only when NOT between two date-ish tokens, since
+# "Mar 2022 – Aug 2024" is the prescribed date format.
+_EN_DASH_PROSE_RE = re.compile(
+    r"(?<![0-9A-Za-z]{3}\s)(?<![0-9]\s)–(?!\s*(?:present|current|\d))",
+    re.IGNORECASE,
+)
+_SENTENCE_SPLIT_RE = re.compile(r"[.!?]+\s+")
+
+
+def _strip_markdown_noise(text: str) -> str:
+    """Remove code blocks and HTML comments before prose-level checks."""
+    text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)
+    text = re.sub(r"<!--.*?-->", " ", text, flags=re.DOTALL)
+    return text
+
+
+def lint_output(document: str, *, kind: str = "resume") -> list[dict]:
+    """Return a list of warning dicts for `document`.
+
+    `kind` is "resume" or "cover-letter"; it only affects which structural
+    checks run (sentence-rhythm analysis is meaningless on bullet
+    fragments, so it is cover-letter only).
+    """
+    warnings: list[dict] = []
+
+    for match in re.finditer(r"\[INSERT[^\]]*\]", document, re.IGNORECASE):
+        warnings.append({
+            "code": "UNRESOLVED_PLACEHOLDER",
+            "text": match.group(0),
+            "hint": "Fill in the real number, or delete this version and "
+                    "keep the SOFT alternate on the same line.",
+        })
+
+    if "<!--SOFT" in document:
+        count = document.count("<!--SOFT")
+        warnings.append({
+            "code": "SOFT_COMMENT_PRESENT",
+            "text": f"{count} <!--SOFT: ...--> comment(s)",
+            "hint": "These are invisible in a markdown preview but paste "
+                    "into Word as visible text. Resolve each bullet, then "
+                    "delete the comment.",
+        })
+
+    prose = _strip_markdown_noise(document)
+
+    em_dashes = _EM_DASH_RE.findall(prose)
+    if em_dashes:
+        warnings.append({
+            "code": "EM_DASH",
+            "text": f"{len(em_dashes)} em dash(es)",
+            "hint": "Replace with a period, comma, or colon.",
+        })
+
+    en_dashes = _EN_DASH_PROSE_RE.findall(prose)
+    if en_dashes:
+        warnings.append({
+            "code": "EN_DASH_IN_PROSE",
+            "text": f"{len(en_dashes)} en dash(es) outside a date range",
+            "hint": "Date ranges keep the en dash. Prose should not.",
+        })
+
+    lowered = prose.casefold()
+    for phrase in AI_TELL_PHRASES:
+        if phrase in lowered:
+            warnings.append({
+                "code": "AI_TELL_PHRASE",
+                "text": phrase,
+                "hint": "Recruiters flag this as machine-written. Replace "
+                        "it with the specific evidence behind the claim.",
+            })
+
+    if kind == "cover-letter":
+        paragraphs = [
+            p.strip() for p in re.split(r"\n\s*\n", prose)
+            if len(p.strip().split()) >= 25
+        ]
+        for para in paragraphs:
+            sentences = [
+                s for s in _SENTENCE_SPLIT_RE.split(para.strip()) if s.strip()
+            ]
+            if len(sentences) < 3:
+                continue
+            lengths = [len(s.split()) for s in sentences]
+            # HUMAN_VOICE_RULES asks for at least one sentence under 8
+            # words. The linter is deliberately a couple of words more
+            # lenient than the prompt: the prompt sets the target, this
+            # catches paragraphs that missed it outright rather than
+            # nagging about a 9-word sentence.
+            if min(lengths) >= 10:
+                warnings.append({
+                    "code": "UNIFORM_SENTENCE_LENGTH",
+                    "text": f"paragraph with sentence lengths {lengths}",
+                    "hint": "No short sentence in this paragraph. Uniform "
+                            "sentence length is a strong machine-written "
+                            "signal. Break one idea into a short sentence.",
+                })
+
+        if len(paragraphs) >= 3:
+            counts = [len(p.split()) for p in paragraphs]
+            spread = max(counts) - min(counts)
+            if spread <= 15:
+                warnings.append({
+                    "code": "UNIFORM_PARAGRAPH_LENGTH",
+                    "text": f"paragraph word counts {counts}",
+                    "hint": "Near-identical paragraph lengths are the "
+                            "template shape recruiters recognize. Make one "
+                            "paragraph noticeably shorter.",
+                })
+
+    return warnings
+
+
 # ---------------------------------------------------------------------------
 # 7. company_slug: safe directory name
 # ---------------------------------------------------------------------------
@@ -918,10 +1234,10 @@ def _cli() -> int:
     p = sub.add_parser(
         "extract-job-fields",
         help=(
-            "Read job-extractor text on stdin, extract company and role, "
-            "and write each to its own file under --output-dir. Per-field "
-            "files rather than a shell-sourced env file, which breaks when "
-            "company / role contain spaces (issue #50)."
+            "Read job-extractor text on stdin, extract company / role / "
+            "screening terms, and write each to its own file under "
+            "--output-dir. Per-field files rather than a shell-sourced env "
+            "file, which breaks when company / role contain spaces (#50)."
         ),
     )
     p.add_argument(
@@ -929,9 +1245,41 @@ def _cli() -> int:
         required=True,
         help=(
             "Directory to write per-field files into. Created if missing. "
-            "Files written: company.txt, role.txt"
+            "Files written: company.txt, role.txt, hard-requirements.txt, "
+            "preferred.txt, title-variants.txt, keywords.txt"
         ),
     )
+
+    p = sub.add_parser(
+        "keyword-coverage",
+        help=(
+            "Deterministic (no LLM): report which JD screening terms appear "
+            "in the tailored resume. Reads the term files written by "
+            "extract-job-fields. Always exits 0 — missing terms are "
+            "information for the student, not a build failure."
+        ),
+    )
+    p.add_argument("--job-dir", required=True, help="Directory holding hard-requirements.txt / preferred.txt")
+    p.add_argument("--resume", required=True, help="Path to the tailored resume markdown")
+    p.add_argument("--json", action="store_true", help="Emit JSON instead of human-readable text")
+
+    p = sub.add_parser(
+        "lint-output",
+        help=(
+            "Deterministic (no LLM): flag unresolved [INSERT ...] "
+            "placeholders, leftover <!--SOFT: ...--> comments, em dashes, "
+            "and phrasing recruiters report as machine-written. Warnings "
+            "only; always exits 0."
+        ),
+    )
+    p.add_argument("--input", required=True, help="Path to the markdown file to lint")
+    p.add_argument(
+        "--kind",
+        choices=["resume", "cover-letter"],
+        default="resume",
+        help="Enables the sentence/paragraph rhythm checks for cover letters",
+    )
+    p.add_argument("--json", action="store_true", help="Emit JSON instead of human-readable text")
 
     p = sub.add_parser("is-failure")
 
@@ -1225,12 +1573,90 @@ def _cli() -> int:
             target.write_text(
                 "" if value is None else str(value), encoding="utf-8"
             )
+
+        # Term lists get one term per line rather than the pipe-separated
+        # wire format, so downstream readers (keyword-coverage, a human
+        # inspecting the run dir) don't have to re-parse the separator.
+        hard = extract_hard_requirements(text)
+        preferred = extract_preferred(text)
+        titles = extract_title_variants(text)
+        for filename, terms in (
+            ("hard-requirements.txt", hard),
+            ("preferred.txt", preferred),
+            ("title-variants.txt", titles),
+        ):
+            (out_dir / filename).write_text(
+                "\n".join(terms) + ("\n" if terms else ""), encoding="utf-8"
+            )
+
+        # Pre-rendered block for the `jd_keywords` prompt variable, so
+        # build-prompt doesn't have to re-derive the formatting.
+        (out_dir / "keywords.txt").write_text(
+            render_jd_keywords(hard, preferred, titles), encoding="utf-8"
+        )
+
         # Stdout summary so the caller can sanity-check at the bash level
         # without re-cat-ing every file. Flat key=value so there's no
         # shell-eats-JSON repeat of issue #44.
         for key in ("company", "role"):
             v = fields[f"{key}.txt"]
             sys.stdout.write(f"{key}={'' if v is None else v}\n")
+        sys.stdout.write(f"hard_requirements={len(hard)}\n")
+        sys.stdout.write(f"preferred={len(preferred)}\n")
+        return 0
+
+    if args.command == "keyword-coverage":
+        job_dir = Path(args.job_dir)
+        resume_text = _read_if_exists(Path(args.resume))
+        if resume_text is None:
+            print(f"FAILURE: no such file: {args.resume}", file=sys.stderr)
+            return 2
+
+        def _terms(name: str) -> list[str]:
+            raw = _read_if_exists(job_dir / name)
+            if not raw:
+                return []
+            return [line.strip() for line in raw.splitlines() if line.strip()]
+
+        hard_cov = keyword_coverage(_terms("hard-requirements.txt"), resume_text)
+        pref_cov = keyword_coverage(_terms("preferred.txt"), resume_text)
+
+        if args.json:
+            print(json.dumps(
+                {"hard_requirements": hard_cov, "preferred": pref_cov},
+                ensure_ascii=False, indent=2,
+            ))
+            return 0
+
+        for label, cov in (("Required", hard_cov), ("Preferred", pref_cov)):
+            if not cov["total"]:
+                continue
+            print(
+                f"{label}: {cov['matched_count']}/{cov['total']} terms present "
+                f"({cov['percent']}%)"
+            )
+            if cov["missing"]:
+                for term in cov["missing"]:
+                    print(f"  missing: {term}")
+        if not hard_cov["total"] and not pref_cov["total"]:
+            print("No screening terms were extracted for this posting.")
+        return 0
+
+    if args.command == "lint-output":
+        doc = _read_if_exists(Path(args.input))
+        if doc is None:
+            print(f"FAILURE: no such file: {args.input}", file=sys.stderr)
+            return 2
+        findings = lint_output(doc, kind=args.kind)
+        if args.json:
+            print(json.dumps(findings, ensure_ascii=False, indent=2))
+            return 0
+        if not findings:
+            print(f"{Path(args.input).name}: clean")
+            return 0
+        for w in findings:
+            print(f"[{w['code']}] {w['text']}")
+            print(f"    {w['hint']}")
         return 0
 
     if args.command == "is-failure":
@@ -1329,6 +1755,7 @@ def _cmd_build_prompt(args: argparse.Namespace) -> int:
         "folder_context": None,
         "folder_summary": None,
         "jd_text": None,
+        "jd_keywords": None,
         "company": None,
         "company_research": None,
         "tailored_resume": None,
@@ -1365,6 +1792,15 @@ def _cmd_build_prompt(args: argparse.Namespace) -> int:
             content = _read_if_exists(run_dir / "jd.txt")
             if content is None:
                 return _missing(var, run_dir / "jd.txt", "orchestration parse-job-content piped through format-jd in Phase 1")
+            kwargs[var] = content
+        elif var == "jd_keywords":
+            content = _read_if_exists(run_dir / "job" / "keywords.txt")
+            if content is None:
+                return _missing(
+                    var, run_dir / "job" / "keywords.txt",
+                    "the job-extractor sub-agent piped through "
+                    "`orchestration extract-job-fields` in Phase 3",
+                )
             kwargs[var] = content
         elif var == "company":
             if not args.company:
