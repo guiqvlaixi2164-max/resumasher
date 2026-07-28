@@ -109,6 +109,11 @@ def _run_claude_p_against_opus(prompt: str, workdir: Path) -> str:
         cwd=str(workdir),
         capture_output=True,
         text=True,
+        # Explicit UTF-8 both ways. Without it, Python encodes stdin via
+        # locale.getpreferredencoding() — cp1252 on Windows English locales —
+        # and the tailor prompt's arrows/em-dashes raise UnicodeEncodeError
+        # before `claude` ever sees the prompt.
+        encoding="utf-8",
         timeout=600,  # 10 min ceiling — Opus tailoring is the slowest sub-agent
     )
     if proc.returncode != 0:

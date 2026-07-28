@@ -5,7 +5,6 @@
 # Usage:
 #   <path>/bin/resumasher-exec orchestration discover-resume .
 #   <path>/bin/resumasher-exec orchestration mine-context . --github-username USER
-#   <path>/bin/resumasher-exec render_pdf --input X.md --kind resume --output X.pdf
 #   <path>/bin/resumasher-exec github_mine USER
 #
 # This wrapper solves two problems at once:
@@ -75,31 +74,26 @@ if [ $# -lt 1 ]; then
 Usage: $(basename "$0") <module> [args...]
 
 Modules:
-  orchestration   — deterministic helpers (parse-job-source, discover-resume,
-                    folder-state-hash, mine-context, extract-fit-score, etc.)
-  render_pdf      — markdown to ATS-safe PDF renderer
+  orchestration   — deterministic helpers (parse-job-mode, discover-resume,
+                    folder-state-hash, mine-context, build-prompt, etc.)
   github_mine     — fetch GitHub profile as resume evidence
-  telemetry       — user-facing analytics controls (status, export, delete, set-tier)
 
 Examples:
   $(basename "$0") orchestration discover-resume .
-  $(basename "$0") render_pdf --input r.md --kind resume --output r.pdf
-  $(basename "$0") telemetry status
+  $(basename "$0") orchestration build-prompt --kind tailor --cwd .
+  $(basename "$0") github_mine octocat
 EOF
   exit 2
 fi
 
 MODULE="$1"; shift
 case "$MODULE" in
-  orchestration|render_pdf|github_mine)
+  orchestration|github_mine)
     exec "$VENV_PY" "$SKILL_ROOT/scripts/${MODULE}.py" "$@"
-    ;;
-  telemetry)
-    exec "$SKILL_ROOT/bin/resumasher-telemetry-cli" "$@"
     ;;
   *)
     echo "Unknown module: $MODULE" >&2
-    echo "Known modules: orchestration, render_pdf, github_mine, telemetry" >&2
+    echo "Known modules: orchestration, github_mine" >&2
     exit 2
     ;;
 esac

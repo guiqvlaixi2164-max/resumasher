@@ -48,17 +48,6 @@ jobs:
         # the same path bin/resumasher-exec takes (mirrors the Windows job).
         run: .venv/bin/python -m pytest -v
 
-      # Upload the golden-fixture PDFs as artifacts so a failing round-trip
-      # test is easy to debug — download the exact PDF CI produced and open it.
-      - name: Upload golden-fixture PDFs on failure
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: golden-fixture-pdfs-py${{ matrix.python-version }}
-          path: /tmp/resumasher-ci-pdfs/
-          if-no-files-found: ignore
-          retention-days: 7
-
   test-windows:
     # The cohort is ~90% Windows, so the Linux-only matrix above covered
     # ~10% of our actual users. This job runs under Git Bash (MINGW64) — the

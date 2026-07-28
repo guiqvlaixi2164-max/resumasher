@@ -2,7 +2,7 @@
 Tests for scripts.prompts — the sub-agent prompt builder.
 
 Every assertion here defends against the bug class that broke Gemini's
-fit-analyst: a sub-agent dispatch going out with a prompt that contains
+a sub-agent dispatch going out with a prompt that contains
 unfilled ``{resume_text}`` / ``{folder_summary}`` / ``{jd_text}`` tokens.
 Previously these substitutions were the orchestrator LLM's responsibility.
 Now they're deterministic Python, and these tests prove it.
@@ -37,18 +37,9 @@ def test_folder_miner_substitutes_folder_context():
     assert "{folder_context}" not in p
 
 
-def test_fit_analyst_substitutes_all_three():
-    p = build_prompt(
-        "fit-analyst",
-        resume_text="RESUME_MARKER",
-        folder_summary="EVIDENCE_MARKER",
-        jd_text="JD_MARKER",
-    )
-    assert "RESUME_MARKER" in p
-    assert "EVIDENCE_MARKER" in p
+def test_job_extractor_substitutes_jd():
+    p = build_prompt("job-extractor", jd_text="JD_MARKER")
     assert "JD_MARKER" in p
-    assert "{resume_text}" not in p
-    assert "{folder_summary}" not in p
     assert "{jd_text}" not in p
 
 
@@ -97,29 +88,14 @@ def test_cover_letter_substitutes_all_required_vars():
     assert "{today_date}" not in p
 
 
-def test_interview_coach_substitutes_all_three():
-    p = build_prompt(
-        "interview-coach",
-        tailored_resume="TAILORED_MARKER",
-        folder_summary="EVIDENCE_MARKER",
-        jd_text="JD_MARKER",
-    )
-    assert "TAILORED_MARKER" in p
-    assert "EVIDENCE_MARKER" in p
-    assert "JD_MARKER" in p
-    assert "{tailored_resume}" not in p
-    assert "{folder_summary}" not in p
-    assert "{jd_text}" not in p
-
-
 # ---------------------------------------------------------------------------
 # The crucial invariant: schema-marker literals pass through untouched
 # ---------------------------------------------------------------------------
 #
 # The tailor's schema block contains things like ``{Full Name}``, ``{Title}``,
-# ``{Company}``. The interview-coach's structure contains ``{Role Title}``,
-# ``{question 1 title}``, etc. These are NOT variables we substitute; they
-# are instructions to the downstream LLM to fill in its own output. If a
+# ``{Company}``. The cover-letter contains ``{Position Title}``. These are
+# NOT variables we substitute; they are instructions to the downstream LLM
+# to fill in its own output. If a
 # naive ``.format()`` call ever sneaks into build_prompt, these tests blow
 # up and stop the bug at CI.
 
@@ -152,17 +128,6 @@ def test_cover_letter_preserves_schema_literals():
     assert "{Position Title}" in p
 
 
-def test_interview_coach_preserves_schema_literals():
-    p = build_prompt(
-        "interview-coach",
-        tailored_resume="R",
-        folder_summary="E",
-        jd_text="J",
-    )
-    for literal in ("{Role Title}", "{Company}", "{question 1 title}", "{question 2 title}"):
-        assert literal in p, f"schema literal {literal!r} was eaten by build_prompt"
-
-
 # ---------------------------------------------------------------------------
 # Safety rails: every prompt kind renders without literal unfilled tokens
 # ---------------------------------------------------------------------------
@@ -170,7 +135,7 @@ def test_interview_coach_preserves_schema_literals():
 
 KIND_FIXTURES: dict[str, dict[str, str]] = {
     "folder-miner": {"folder_context": "FOLDER"},
-    "fit-analyst": {"resume_text": "R", "folder_summary": "E", "jd_text": "J"},
+    "job-extractor": {"jd_text": "J"},
     "company-researcher": {"company": "Acme"},
     "tailor": {
         "contact_info": "# Test\nt@x.com",
@@ -185,7 +150,6 @@ KIND_FIXTURES: dict[str, dict[str, str]] = {
         "jd_text": "J",
         "company_research": "C",
     },
-    "interview-coach": {"tailored_resume": "R", "folder_summary": "E", "jd_text": "J"},
 }
 
 
@@ -194,7 +158,7 @@ def test_no_required_var_leaks(kind: str):
     """
     After build_prompt returns, none of the DECLARED input-variable tokens
     for that kind should still appear. The regression we're preventing is
-    Gemini's fit-analyst receiving a literal "{resume_text}" in its prompt.
+    Gemini's fit sub-agent receiving a literal "{resume_text}" in its prompt.
     """
     p = build_prompt(kind, **KIND_FIXTURES[kind])
     spec = PROMPT_KINDS[kind]
@@ -218,8 +182,8 @@ def test_unknown_kind_raises():
 
 def test_missing_required_var_raises():
     with pytest.raises(ValueError, match="requires"):
-        build_prompt("fit-analyst", resume_text="R", folder_summary="E")
-        # jd_text missing
+        build_prompt("tailor", resume_text="R", folder_summary="E")
+        # contact_info + jd_text missing
 
 
 def test_tailor_without_contact_info_raises():
@@ -304,79 +268,6 @@ def test_format_contact_info_missing_name_raises():
 
 
 # ---------------------------------------------------------------------------
-# Issue #20 — photo_path argument emits `<!-- photo: ... -->` comment
-# ---------------------------------------------------------------------------
-
-
-def test_format_contact_info_with_photo_emits_html_comment():
-    """When photo_path is provided, the header gains a third line with
-    an HTML comment carrying the path. Markdown previews render the
-    comment as invisible; the resumasher parser picks it up and exposes
-    it on ResumeDoc.photo_path for the renderer."""
-    ci = format_contact_info(
-        name="Test Candidate",
-        email="test@example.com",
-        phone="+43 664 0000000",
-        location="Vienna",
-        photo_path="/home/student/photos/headshot.jpg",
-    )
-    lines = ci.splitlines()
-    assert lines[0] == "# Test Candidate"
-    assert lines[1] == "test@example.com | +43 664 0000000 | Vienna"
-    assert lines[2] == "<!-- photo: /home/student/photos/headshot.jpg -->"
-    assert len(lines) == 3
-
-
-def test_format_contact_info_without_photo_omits_comment():
-    """Backwards compatibility: the default (no photo_path) keeps the
-    two-line header exactly as it was pre-#20. Callers that never pass
-    photo_path see zero change."""
-    ci = format_contact_info(
-        name="Test Candidate",
-        email="test@example.com",
-        location="Vienna",
-    )
-    assert ci == "# Test Candidate\ntest@example.com | Vienna"
-    assert "<!-- photo" not in ci
-
-
-def test_format_contact_info_photo_path_whitespace_treated_as_absent():
-    """Whitespace-only photo_path behaves like no photo_path at all.
-    Matches the treatment of email/phone/etc. — whitespace doesn't
-    count as a real value."""
-    ci = format_contact_info(
-        name="Test Candidate",
-        email="test@example.com",
-        photo_path="   ",
-    )
-    assert "<!-- photo" not in ci
-
-
-def test_format_contact_info_photo_path_trimmed_in_comment():
-    """A photo_path with leading/trailing whitespace gets trimmed before
-    going into the comment. The markdown stays clean even when the
-    caller is sloppy."""
-    ci = format_contact_info(
-        name="Test Candidate",
-        email="test@example.com",
-        photo_path="  /home/student/headshot.jpg  ",
-    )
-    assert "<!-- photo: /home/student/headshot.jpg -->" in ci
-    # Leading/trailing spaces never reach the comment body.
-    assert "<!-- photo:  " not in ci
-
-
-def test_format_contact_info_handles_non_ascii():
-    """
-    Non-ASCII names (Müller, Arino with tilde, Jiří) must flow through
-    unchanged — no mangling, no stripping, no 'replace' encoding.
-    """
-    ci = format_contact_info(name="Ana Müller", email="ana@x.com")
-    assert "Ana Müller" in ci
-    assert "ü" in ci  # byte-level confirmation
-
-
-# ---------------------------------------------------------------------------
 # CLI: build-prompt reads config.json for tailor kind
 # ---------------------------------------------------------------------------
 
@@ -394,9 +285,6 @@ def test_cli_build_prompt_tailor_reads_config(skill_tree: Path):
         "phone": "+1 650 200 7168",
         "linkedin": "https://linkedin.com/in/earino",
         "location": "Vienna",
-        "default_style": "eu",
-        "include_photo": True,
-        "photo_path": "/Users/earino/Desktop/headshot.png",
         "github_username": "earino",
         "github_prompted": True,
     }
@@ -471,12 +359,7 @@ def test_empty_string_is_allowed_not_missing():
     empty' (empty string → substituted cleanly). An empty JD is weird but
     not malformed; only a None supply is actionable-error territory.
     """
-    p = build_prompt(
-        "fit-analyst",
-        resume_text="R",
-        folder_summary="E",
-        jd_text="",
-    )
+    p = build_prompt("job-extractor", jd_text="")
     assert "{jd_text}" not in p
 
 
@@ -537,13 +420,11 @@ def _run_build_prompt(*argv: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_cli_build_prompt_fit_analyst(skill_tree: Path):
-    r = _run_build_prompt("--kind", "fit-analyst", "--cwd", str(skill_tree))
+def test_cli_build_prompt_job_extractor(skill_tree: Path):
+    r = _run_build_prompt("--kind", "job-extractor", "--cwd", str(skill_tree))
     assert r.returncode == 0, r.stderr
-    assert "RESUME_FILE_CONTENT" in r.stdout
-    assert "CACHE_FILE_CONTENT" in r.stdout
     assert "JD_FILE_CONTENT" in r.stdout
-    assert "{resume_text}" not in r.stdout
+    assert "{jd_text}" not in r.stdout
 
 
 def test_cli_build_prompt_folder_miner(skill_tree: Path):
@@ -590,18 +471,6 @@ def test_cli_build_prompt_cover_letter(skill_tree: Path):
     assert "t@x.com" in r.stdout
 
 
-def test_cli_build_prompt_interview_coach(skill_tree: Path):
-    r = _run_build_prompt(
-        "--kind", "interview-coach",
-        "--cwd", str(skill_tree),
-        "--out-dir", str(skill_tree / "applications" / "biohub-20260418"),
-    )
-    assert r.returncode == 0, r.stderr
-    assert "TAILORED_FILE_CONTENT" in r.stdout
-    assert "CACHE_FILE_CONTENT" in r.stdout
-    assert "JD_FILE_CONTENT" in r.stdout
-
-
 def test_cli_build_prompt_tailor(skill_tree: Path):
     # Tailor now requires config.json for contact_info — write a minimal one.
     (skill_tree / ".resumasher" / "config.json").write_text(
@@ -623,10 +492,10 @@ def test_cli_build_prompt_missing_file_exits_2(tmp_path: Path):
     Exit code 2 (not 1) so orchestrator scripts can distinguish "file not
     ready" from "unknown kind" or other errors.
     """
-    r = _run_build_prompt("--kind", "fit-analyst", "--cwd", str(tmp_path))
+    r = _run_build_prompt("--kind", "folder-miner", "--cwd", str(tmp_path))
     assert r.returncode == 2
     assert "FAILURE" in r.stderr
-    assert "resume.txt" in r.stderr
+    assert "context.txt" in r.stderr
 
 
 def test_cli_build_prompt_missing_company_exits_2(skill_tree: Path):

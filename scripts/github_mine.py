@@ -4,7 +4,7 @@ Mine a GitHub profile for resume evidence.
 Fetches a user's public repos and produces a prose summary the folder-miner
 sub-agent can consume alongside (or instead of) local folder evidence.
 
-Design choices (see docs/DESIGN.md):
+Design choices:
 - Prefer `gh api` if available — reuses the user's existing auth, 5000/hr
   rate limit, zero PAT handling on our side.
 - Fall back to unauthenticated `urllib` requests against the public REST API.

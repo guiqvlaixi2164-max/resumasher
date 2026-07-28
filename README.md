@@ -3,11 +3,13 @@
 [![CI](https://github.com/earino/resumasher/actions/workflows/ci.yml/badge.svg)](https://github.com/earino/resumasher/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/earino/resumasher/blob/main/LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![Tests: 282 passing](https://img.shields.io/badge/tests-282%20passing-brightgreen.svg)](https://github.com/earino/resumasher/tree/main/tests)
+[![Tests: 199 passing](https://img.shields.io/badge/tests-199%20passing-brightgreen.svg)](https://github.com/earino/resumasher/tree/main/tests)
 
-resumasher tailors your resume, writes a cover letter, and builds an interview prep bundle for a specific job. It runs as an [Agent Skill](https://github.com/anthropics/skills) inside your AI CLI (**Claude Code**, **OpenAI Codex CLI**, **Google Gemini CLI**, or **OpenCode**), reading your actual work to back every claim with concrete evidence.
+resumasher tailors your resume and writes a matching cover letter for a specific job. It runs as an [Agent Skill](https://github.com/anthropics/skills) inside your AI CLI (**Claude Code**, **OpenAI Codex CLI**, **Google Gemini CLI**, or **OpenCode**), reading your actual work to back every claim with concrete evidence.
 
-![resumasher running: terminal walkthrough from `/resumasher job.md` through fit assessment, tailor, placeholder fill, and PDF render](assets/img/demo.gif)
+**It outputs markdown, not PDFs.** The text is the hard part — the wording, the evidence, which experience leads. Formatting is the easy part, and you'll want to do it in Word or Google Docs anyway. resumasher hands you clean, tailored markdown and gets out of the way.
+
+![resumasher running: terminal walkthrough from `/resumasher job.md` through the folder mine, tailor, and cover letter](assets/img/demo.gif)
 
 ## Quick install
 
@@ -25,16 +27,16 @@ From your resume folder, run:
 /resumasher job.md
 ```
 
-A few minutes later you get `./applications/<company>-<date>/` containing:
+A couple of minutes later you get `./applications/<company>-<date>/` containing:
 
 | File | What it is |
 |---|---|
-| `resume.pdf` | Tailored resume, ATS-safe, single column, EU or US style |
-| `cover-letter.pdf` | 3-paragraph cover letter weaving in recent company news |
-| `interview-prep.pdf` | Likely SQL, case, and behavioral questions with draft answers pulled from your actual projects |
-| `fit-assessment.md` | Honest fit score (0-10) with strengths and gaps. Not a pep talk. |
-| `company-research.md` | 3-5 recent facts about the company with citations |
-| `tailored-resume.md`, `cover-letter.md`, `interview-prep.md` | Markdown sources (edit and re-render) |
+| `tailored-resume.md` | Your resume rewritten for this JD — bullets rewritten around the evidence, sections ordered for the market, bullets ranked by relevance to the posting |
+| `cover-letter.md` | ~300 words in 3 paragraphs, weaving in recent company news with citations |
+| `jd.md` | The posting as ingested, for your records |
+
+Open the markdown in any editor, fill in the handful of `[INSERT ...]` metrics
+it flags, paste into Word / Google Docs / Pages, format, export to PDF, send.
 
 ## The unfair advantage: it sees your actual work
 
@@ -50,7 +52,7 @@ Your bullet becomes: "Built an XGBoost churn classifier on 2.3M rows, F1=0.82, d
 
 resumasher is an [Agent Skills](https://github.com/anthropics/skills) package. If your AI CLI asks "is this a plugin," the answer is no, it's a skill. Each host has its own skill directory convention (`.claude/skills/`, `.codex/skills/`, `.gemini/skills/`, `.opencode/skills/`) but the skill source is identical. Pick the block that matches your AI CLI.
 
-**⚠️ `install.sh` is mandatory on every host.** `git clone` alone only copies files. It does NOT create the Python virtual environment or install the required packages (reportlab, pdfminer.six, chardet, nbconvert, Pillow). If you skip `install.sh`, the next invocation of `/resumasher` will crash with `ModuleNotFoundError: No module named 'reportlab'` and you'll think the skill is broken.
+**⚠️ `install.sh` is mandatory on every host.** `git clone` alone only copies files. It does NOT create the Python virtual environment or install the required packages (pdfminer.six, chardet, nbconvert). If you skip `install.sh`, the next invocation of `/resumasher` will crash with `ModuleNotFoundError: No module named 'pdfminer'` and you'll think the skill is broken.
 
 ### Claude Code
 
@@ -128,7 +130,7 @@ Restart OpenCode, then run `/resumasher <job>` from a folder with your `resume.m
 
 #### OpenCode `tool_output.max_bytes` setting (small-model users only)
 
-OpenCode caps tool output at 51,200 bytes by default ([source](https://github.com/sst/opencode/blob/dev/packages/opencode/src/tool/truncate.ts)). resumasher's `SKILL.md` is ~82KB — above the cap. When the cap is too low, OpenCode truncates the skill load and the model sees only the first ~38% of the workflow. Strong cloud models (Claude, GPT-5) usually recover by inferring the missing phases. Weak local models (qwen-32b, llama-32b, etc.) miss Phase 7-9 prescriptions and ship wrong PDF filenames, missing `interview-prep.pdf`, and skeletal Phase 9 telemetry.
+OpenCode caps tool output at 51,200 bytes by default ([source](https://github.com/sst/opencode/blob/dev/packages/opencode/src/tool/truncate.ts)). resumasher's `SKILL.md` is ~28KB, comfortably under the default. But if you've *lowered* the cap, OpenCode truncates the skill load and the model sees only part of the workflow — and a model that reads half the pipeline ships broken output rather than failing loudly. Strong cloud models (Claude, GPT-5) usually recover by inferring the missing phases; weak local models (qwen-32b, llama-32b) do not.
 
 `install.sh` reads your OpenCode config (read-only, never modifies it) and prints a heads-up if your cap is below `SKILL.md`'s size. To raise it, add this to `~/.config/opencode/opencode.json` (or the `XDG_CONFIG_HOME`-based equivalent):
 
@@ -151,7 +153,7 @@ cd <install-dir>/GOLDEN_FIXTURES    # e.g. ~/.claude/skills/resumasher/GOLDEN_FI
 /resumasher sample-jd.md
 ```
 
-A few minutes later you should see three PDFs in `./applications/deloitte-consulting-<today>/`. Wall-clock time depends on the LLM in use, GitHub fetch latency, and your network.
+A couple of minutes later you should see `tailored-resume.md` and `cover-letter.md` in `./applications/deloitte-consulting-<today>/`. Wall-clock time depends on the LLM in use, GitHub fetch latency, and your network.
 
 ### For your AI CLI: authoritative install instructions
 
@@ -176,7 +178,7 @@ Three input forms, all work:
 
 ### First-run setup (one time per folder)
 
-The first time you run `/resumasher` in a folder, it asks for your contact info, default resume style (EU or US), whether to include a photo by default, and (last question) whether to opt into anonymous usage analytics. Short one-time setup. Your contact info and application history are stored locally in `.resumasher/` — never uploaded. The analytics tier defaults to off; if you opt in, see [PRIVACY.md](PRIVACY.md) for exactly what gets sent and what doesn't.
+The first time you run `/resumasher` in a folder, it reads your contact details off your resume, shows you what it found, and asks you to confirm — one question, not five. It also asks once whether you have a GitHub to mine. Everything is stored locally in `.resumasher/` and nothing is uploaded.
 
 ### Accepted resume formats
 
@@ -200,8 +202,7 @@ resumasher looks for these files in the working directory, in priority order:
 ```
 my-job-search/
 ├── resume.md            # Your base resume (see formats above)
-├── photo.jpg            # Optional, for EU-style resumes
-├── applications/        # resumasher writes PDFs here
+├── applications/        # resumasher writes tailored markdown here
 └── projects/            # Your work: code, notebooks, READMEs, PDFs
     ├── capstone/
     ├── ml-final/
@@ -236,13 +237,13 @@ gh auth login
 ### Flags
 
 ```bash
-/resumasher <job> --style us       # US style (no photo, different section order)
-/resumasher <job> --style eu       # EU style (photo optional)
-/resumasher <job> --photo me.jpg   # Override photo path
-/resumasher <job> --no-photo       # Suppress photo for this run
+/resumasher <job> --github <username>   # One-run override of the configured GitHub account
 ```
 
-`--style` always wins over `--photo`. US-style resumes never include a photo.
+Section order is inferred from the JD's market rather than set by a flag:
+anglophone postings get Summary → Experience → Projects → Skills → Education;
+continental-European postings move Education above Skills. Override it by
+reordering the markdown yourself — it's your file.
 
 ## Updating an existing install
 
@@ -329,23 +330,21 @@ If the detection block exits with "resumasher is not installed," do not guess. T
 
 ## ATS safety
 
-Every generated PDF passes `pdfminer.six` round-trip extraction. We've also manually verified the output through Jobscan's free parser to confirm section detection.
+resumasher generates markdown, so ATS safety is mostly in your hands at format time. What the skill controls, it gets right: single-column structure, conventional section headings ATS parsers recognize, one project per heading, no tables or multi-column layouts in the source.
 
-**Before applying through a major ATS** (Workday, Taleo, iCIMS), upload your `resume.pdf` to [jobscan.co](https://www.jobscan.co/) (free preview) with the JD pasted in, and eyeball that sections parse the way you'd expect.
+**Before applying through a major ATS** (Workday, Taleo, iCIMS), export your formatted resume to PDF and upload it to [jobscan.co](https://www.jobscan.co/) (free preview) with the JD pasted in, and eyeball that sections parse the way you'd expect. Avoid text boxes, tables, and sidebars when you format — those are the most common cause of word-salad parsing.
 
 ## Something looks wrong?
 
-resumasher runs inside your AI CLI and the agent can investigate its own output. If a PDF looks off — missing content, a stretched photo, sections in a weird order, anything — stay in the same chat and describe what you see in plain English. The agent will read the artifacts, match your symptom against [known failure modes](docs/KNOWN_FAILURE_MODES.md), and draft a bug report you can review and file (with your contact info redacted).
-
-No commands to remember, no `--debug` flag. Just tell your AI CLI what's wrong.
+resumasher runs inside your AI CLI, so stay in the same chat and describe what you see in plain English. The agent has the generated markdown, the JD, and the mined evidence right there — it can tell you whether a weak bullet came from thin evidence or from the tailor underselling you, and rewrite it.
 
 ## Architecture
 
-The skill runs a nine-phase pipeline: first-run setup → intake → folder + GitHub mine → fit analysis → company research → tailor → parallel cover-letter + interview-prep → interactive placeholder fill → PDF render → log and summary.
+The skill runs a five-phase pipeline: first-run setup → intake → folder + GitHub mine → company/role extract + research → tailor → cover letter.
 
 Sub-agents dispatch via each host's subagent mechanism (Claude's `Task` with `subagent_type="general-purpose"`, Gemini's `@generalist`, Codex's inline execution, or OpenCode's `task` with `subagent_type="general"`). Interactive prompts use each host's native tool (`AskUserQuestion` / `request_user_input` / `ask_user` / `question`) with a hard-fail fallback for non-interactive contexts.
 
-The LLM pipeline runs prose between phases (no JSON), with small sentinel lines (`FIT_SCORE: 7`, `COMPANY: Deloitte`, `FAILURE: ...`) where structure actually matters. Job descriptions and company-research output are wrapped in `<<<UNTRUSTED_*>>>` markers before reaching sub-agents with file or web access. Basic prompt-injection containment.
+The LLM pipeline runs prose between phases (no JSON), with small sentinel lines (`COMPANY: Deloitte`, `ROLE: Data Analyst`, `FAILURE: ...`) where structure actually matters. Job descriptions and company-research output are wrapped in `<<<UNTRUSTED_*>>>` markers before reaching sub-agents with file or web access. Basic prompt-injection containment.
 
 ```
 resumasher/
@@ -354,42 +353,18 @@ resumasher/
 │   └── resumasher-exec     # Self-locating wrapper around venv Python
 ├── scripts/
 │   ├── orchestration.py    # Deterministic helpers (CLI + importable)
-│   ├── prompts.py          # All 6 sub-agent prompt templates + substitution
-│   ├── render_pdf.py       # Pure-Python PDF renderer (reportlab + DejaVu Sans)
+│   ├── prompts.py          # All 5 sub-agent prompt templates + substitution
 │   └── github_mine.py      # GitHub profile evidence fetcher
-├── assets/
-│   ├── DejaVuSans.ttf
-│   └── DejaVuSans-Bold.ttf
-├── docs/DESIGN.md          # Design rationale (read before a large PR)
 ├── GOLDEN_FIXTURES/        # Sample portfolio for testing and demo
 ├── tests/                  # pytest suite
 ├── install.sh              # One-liner installer + venv setup
 └── requirements.txt
 ```
 
-## Usage analytics
-
-resumasher can optionally send anonymous usage data to help the maintainer see what's breaking and what students actually use. **Default is off.** You're asked once during first-run setup; change anytime with `resumasher telemetry set-tier <off|anonymous|community>`.
-
-Three tiers:
-
-- **Off** (default): nothing logged, nothing sent.
-- **Anonymous**: event data sent without an installation identifier. Individual runs cannot be correlated.
-- **Community**: same data plus a random UUID so the maintainer can see "one user is hitting this bug three times in a row" vs "three unrelated users".
-
-See [PRIVACY.md](PRIVACY.md) for the complete list of what's logged and what isn't. Highlights: no resume content, no JD text, no names, no GitHub usernames, no email addresses. Data is stored on Supabase in the Ireland region (eu-west-1) and retained for 90 days.
-
-```bash
-resumasher telemetry status             # Show tier, installation ID, log size
-resumasher telemetry export             # See everything that's been logged locally
-resumasher telemetry delete             # Wipe local data + backend data for your ID
-resumasher telemetry set-tier anonymous # Change tier
-```
-
 ## Development
 
 ```bash
-# Run the test suite (282 tests, ~5 seconds)
+# Run the test suite (199 tests, ~5 seconds)
 source .venv/bin/activate
 pytest tests/ -v
 
@@ -401,38 +376,31 @@ cd GOLDEN_FIXTURES
 Before opening a PR:
 
 - `pytest tests/ -v` should pass.
-- If you change rendering logic, regenerate the `GOLDEN_FIXTURES` output and eyeball it through [jobscan.co](https://www.jobscan.co/) to confirm ATS parsing still works.
-- For larger changes, read [`docs/DESIGN.md`](https://github.com/earino/resumasher/blob/main/docs/DESIGN.md) first. It captures why the skill is shaped the way it is (prose between LLM phases, pure-Python PDF, deterministic prompt substitution) so you can propose changes that work with the design rather than against it.
+- If you change a sub-agent prompt, run it against `GOLDEN_FIXTURES/` and read the output. Prompt regressions don't show up in unit tests.
+- Prompt templates live in `scripts/prompts.py` — that's the canonical source. `SKILL.md` describes the orchestration, not the prompt text.
 
 ## Roadmap
 
-**v0.1 (shipped):**
-- EU and US resume styles, ATS-safe single-column layout
+**Shipped:**
+- Markdown-first output — tailored resume + cover letter, no PDF renderer
+- Market-aware section ordering and JD-relevance bullet ranking, decided by the tailor
 - English-only JD input (pasted, file, or URL)
-- Nine-phase pipeline with prompt-injection containment and ATS round-trip gate
-- Multi-role tenures rendered correctly (e.g., Meta progression shown as one company entry with sub-role bullets)
-- Photos auto-downscaled to keep output PDFs under 200KB
+- Five-phase pipeline with prompt-injection containment
+- Multi-role tenures rendered correctly (e.g. a Meta progression as one company entry with sub-role bullets)
 - `resume.pdf` accepted when no markdown source exists
+- Non-English resume filenames (`Lebenslauf.md`, `履歴書.md`, `my_resume_final_v3.md`) — when auto-discovery misses, the skill asks once and validates the answer
 - GitHub profile mining (`gh api` preferred, unauthenticated fallback)
-- `[INSERT ...]` placeholder pattern with interactive fill-in (Specifics / Soften / Drop per bullet)
+- `[INSERT ...]` placeholders paired with `<!--SOFT: ... -->` alternates, left in the file for you to resolve while editing
 - Local application history log (`.resumasher/history.jsonl`)
-- Runs on Claude Code, OpenAI Codex CLI, and Google Gemini CLI
+- Runs on Claude Code, OpenAI Codex CLI, Google Gemini CLI, and OpenCode
+- GitHub Actions CI on Python 3.10, 3.11, 3.12
 
-**v0.2 (shipped):**
-- Opt-in usage analytics with three-tier consent (off / anonymous / community), default off, GDPR-compliant ([#2](https://github.com/earino/resumasher/issues/2)). Supabase backend in Ireland. Student-facing CLI: `resumasher telemetry status / export / delete / set-tier`. Full detail in [PRIVACY.md](PRIVACY.md).
-- Fit-analyst emits structured sentinels (`ROLE:`, `SENIORITY:`, `STRENGTHS_COUNT:`, `GAPS_COUNT:`, `RECOMMENDATION:`) with multilingual seniority classification (any language the LLM understands).
-
-**v0.3 (shipped):**
-- Non-English resume filename detection ([#3](https://github.com/earino/resumasher/issues/3)). Students whose resume lives as `Lebenslauf.md`, `履歴書.md`, `cv_francais.md`, or `my_resume_final_v3.md` no longer hit a terminal "no resume found" error — when auto-discovery misses, the skill asks once and validates the answer.
-- GitHub Actions CI with PDF round-trip on every push ([#8](https://github.com/earino/resumasher/issues/8)). Full pytest suite (220 tests) runs on Python 3.10, 3.11, 3.12 on every push and PR. Failed runs upload the generated PDFs as debug artifacts.
-- Live community stats dashboard at [earino.github.io/resumasher/stats](https://earino.github.io/resumasher/stats/). Aggregate metrics from opt-in community telemetry: runs per day, host distribution, model mix, fit score histogram, failures by phase. No per-user data exposed.
-
-**Planned (shaped by early user feedback):**
-- `--review` mode: step-by-step interactive rewriting for every bullet, not just placeholders ([#11](https://github.com/earino/resumasher/issues/11))
-- Final coherence pass flagging cross-document drift before PDF render ([#1](https://github.com/earino/resumasher/issues/1))
+**Planned:**
+- `--review` mode: step-by-step interactive rewriting for every bullet ([#11](https://github.com/earino/resumasher/issues/11))
+- Final coherence pass flagging drift between resume and cover letter ([#1](https://github.com/earino/resumasher/issues/1))
 - Incremental folder-mine cache invalidation ([#10](https://github.com/earino/resumasher/issues/10))
 - German / French JD translation pre-pass ([#7](https://github.com/earino/resumasher/issues/7))
-- Facts persistence: remember placeholder-fill answers across runs ([#9](https://github.com/earino/resumasher/issues/9))
+- Facts persistence: remember placeholder answers across runs ([#9](https://github.com/earino/resumasher/issues/9))
 
 ## Contributing
 

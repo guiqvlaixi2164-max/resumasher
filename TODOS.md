@@ -10,7 +10,7 @@ Deferred work captured during development. When picking something up, read the f
 
 **What.** Replace `requirements.txt` `>=` pins with exact versions and generate a `requirements-lock.txt` via `pip-compile --generate-hashes`. Update `install.sh` to use `pip install --require-hashes -r requirements-lock.txt` when the lockfile exists.
 
-**Why.** Supply-chain attack surface. Current `requirements.txt` uses `reportlab>=4.0.0`, `pdfminer.six>=20221105`, `chardet>=5.0.0`, `nbconvert>=7.0.0`. Every `bash install.sh` resolves to whatever version is latest on PyPI at install time. A compromised PyPI account for any of the 4 direct deps (or their transitive deps) propagates to every student's laptop on the next install. `pdfminer.six` is single-maintainer — higher hijack risk.
+**Why.** Supply-chain attack surface. Current `requirements.txt` uses `pdfminer.six>=20221105`, `chardet>=5.0.0`, `nbconvert>=7.0.0`. Every `bash install.sh` resolves to whatever version is latest on PyPI at install time. A compromised PyPI account for any of the 3 direct deps (or their transitive deps) propagates to every student's laptop on the next install. `pdfminer.six` is single-maintainer — higher hijack risk.
 
 **Pros.** Future-proofs against PyPI compromise. Reproducible installs. Explicit upgrade moments (you regenerate the lockfile when you want to update).
 

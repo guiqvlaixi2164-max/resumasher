@@ -35,7 +35,7 @@ SANDBOX_VENV="${RESUMASHER_VENV:-$HOME/.venv-resumasher-sandbox}"
 # Idempotent fast-path: if the venv exists and has the project's hard deps,
 # do nothing.
 if [ -x "$SANDBOX_VENV/bin/python" ] && \
-   "$SANDBOX_VENV/bin/python" -c "import chardet, reportlab, pytest" >/dev/null 2>&1; then
+   "$SANDBOX_VENV/bin/python" -c "import chardet, pdfminer, pytest" >/dev/null 2>&1; then
   echo "Sandbox venv already provisioned at $SANDBOX_VENV"
   exit 0
 fi
@@ -65,7 +65,7 @@ echo "Installing dependencies (this can take ~30s)..."
 "$SANDBOX_VENV/bin/python" -m pip install --quiet --default-timeout=300 --retries=10 -r "$SKILL_ROOT/requirements-dev.txt"
 
 # Sanity check.
-if ! "$SANDBOX_VENV/bin/python" -c "import chardet, reportlab, pytest" >/dev/null 2>&1; then
+if ! "$SANDBOX_VENV/bin/python" -c "import chardet, pdfminer, pytest" >/dev/null 2>&1; then
   echo "ERROR: sandbox venv built but missing expected deps. Inspect $SANDBOX_VENV." >&2
   exit 1
 fi

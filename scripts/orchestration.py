@@ -3,7 +3,7 @@ Deterministic orchestration helpers for resumasher.
 
 Everything that can be done without calling an LLM lives here: parsing args,
 finding the resume, hashing folder state, mining content the LLM will see,
-regex-extracting fit scores, appending history, and first-run setup.
+regex-extracting the company and role, appending history, and first-run setup.
 
 These are CLI-callable so SKILL.md can shell out without re-implementing logic
 in a prompt, and importable so tests can exercise every branch.
@@ -11,16 +11,21 @@ in a prompt, and importable so tests can exercise every branch.
 CLI map:
     python -m scripts.orchestration parse-job-mode <arg>
     python -m scripts.orchestration parse-job-content <arg>
+    python -m scripts.orchestration format-jd --mode <mode> [--url <url>]
     python -m scripts.orchestration discover-resume <cwd>
+    python -m scripts.orchestration validate-resume-path <cwd> <filename>
     python -m scripts.orchestration folder-state-hash <cwd>
-    python -m scripts.orchestration mine-context <cwd>
+    python -m scripts.orchestration mine-context <cwd> [--github-username <user>]
     python -m scripts.orchestration read-resume <path>
-    python -m scripts.orchestration extract-fit-score <<< "prose with FIT_SCORE: 7 line"
     python -m scripts.orchestration extract-company <<< "prose with COMPANY: Deloitte line"
+    python -m scripts.orchestration extract-role <<< "prose with ROLE: Data Analyst line"
+    python -m scripts.orchestration extract-job-fields --output-dir <dir>
     python -m scripts.orchestration is-failure <<< "FAILURE: reason"       (exit 0 = yes)
     python -m scripts.orchestration append-history <cwd> <json-line>
-    python -m scripts.orchestration first-run-setup <cwd>
+    python -m scripts.orchestration first-run-needed <cwd>
+    python -m scripts.orchestration ensure-gitignore <cwd>
     python -m scripts.orchestration company-slug "Deloitte Consulting LLC"
+    python -m scripts.orchestration build-prompt --kind <kind> --cwd <cwd>
 """
 
 from __future__ import annotations
@@ -213,157 +218,16 @@ def validate_resume_path(cwd: Path, filename: str) -> tuple[Optional[Path], Opti
 
 
 # ---------------------------------------------------------------------------
-# 2.5 cleanup_stray_outputs: defense-in-depth for misbehaving sub-agents
+# 2.5 CleanupAction: record type for the stray-file scans
 # ---------------------------------------------------------------------------
-#
-# Background: weaker models (observed on Haiku 4.5 in issue #29, NOT on Opus
-# 4.7) sometimes ignore the interview-coach prompt's "do not write to disk"
-# constraint and use the Write tool to create a markdown file with a
-# fabricated name (e.g. "Ana_Muller_Interview_Prep_Bundle.md") directly in
-# $STUDENT_CWD. Functionally the content is correct, but it pollutes the
-# student's working directory — a hard contract violation.
-#
-# This scan is the belt; the prompt surgery and SKILL.md Phase 6 wording are
-# the suspenders. Even if a future model regresses against the prompt, the
-# scan removes the rogue file before the student sees it.
-#
-# Anti-footgun rules:
-#   - Top-level only (never recursive). Students may have legitimate
-#     interview-prep notes in subdirectories.
-#   - mtime gate: only files newer than the dispatch timestamp are
-#     candidates. Pre-existing student files are never touched.
-#   - Name match: the file's basename must contain "interview", "prep", or
-#     "bundle" (case-insensitive substring). These are the shapes the issue
-#     observed. Generic names like "notes.md" are never touched.
-#   - Protected names: documented input/output filenames are never touched
-#     even if their name matches the heuristic.
-
-INTERVIEW_PREP_NAME_PATTERNS = ("interview", "prep", "bundle")
-
-PROTECTED_NAMES_LOWER = frozenset(
-    name.lower()
-    for name in (
-        # Documented INPUT names — the student owns these. The cleanup scan
-        # must never touch them even if their name matches the heuristic.
-        # OUTPUT names (interview-prep.md, cover-letter.md) deliberately are
-        # NOT in this set: if a misbehaving sub-agent writes an output-named
-        # file in cwd, it IS the rogue and should be cleaned up. The mtime
-        # gate is what protects pre-existing student files of any name.
-        *RESUME_CANDIDATES,
-        "jd.md",
-        "jd.markdown",
-    )
-)
 
 
-@dataclass(frozen=True)
+@dataclass
 class CleanupAction:
     path: Path  # absolute path to the rogue file (pre-action)
     action: str  # "moved" | "deleted" | "skipped"
     reason: str  # human-readable explanation
     destination: Optional[Path] = None  # only set when action == "moved"
-
-
-def cleanup_stray_outputs(
-    cwd: Path,
-    out_dir: Path,
-    since_timestamp: float,
-) -> list[CleanupAction]:
-    """Scan `cwd` top-level for rogue interview-prep files and clean up.
-
-    For each markdown file in `cwd` (top level, not recursive) whose name
-    matches an interview-prep pattern AND whose mtime is newer than
-    `since_timestamp` AND whose name is not in PROTECTED_NAMES_LOWER:
-      - If `out_dir/interview-prep.md` is missing or empty, MOVE the rogue
-        file there (best-effort recovery — the orchestrator's own write
-        didn't happen, but at least the rogue's content survives).
-      - Otherwise, DELETE the rogue file (orchestrator already wrote the
-        right thing; the rogue is just pollution).
-
-    Never raises on a single bad file — records a `skipped` action and moves on.
-    Returns the full list of CleanupAction records describing what happened.
-    """
-    actions: list[CleanupAction] = []
-    if not cwd.exists() or not cwd.is_dir():
-        return actions
-
-    target = out_dir / "interview-prep.md"
-
-    try:
-        entries = list(cwd.iterdir())
-    except OSError:
-        return actions
-
-    for entry in entries:
-        try:
-            if not entry.is_file():
-                continue
-            if entry.suffix.lower() != ".md":
-                continue
-            name_lower = entry.name.lower()
-            if name_lower in PROTECTED_NAMES_LOWER:
-                continue
-            if not any(pat in name_lower for pat in INTERVIEW_PREP_NAME_PATTERNS):
-                continue
-            try:
-                mtime = entry.stat().st_mtime
-            except OSError:
-                continue
-            if mtime <= since_timestamp:
-                continue
-        except OSError:
-            continue
-
-        # Decide MOVE vs DELETE.
-        target_exists_with_content = (
-            target.exists() and target.is_file() and target.stat().st_size > 0
-        )
-        if not target_exists_with_content:
-            try:
-                out_dir.mkdir(parents=True, exist_ok=True)
-                entry.replace(target)
-                actions.append(
-                    CleanupAction(
-                        path=entry,
-                        action="moved",
-                        reason=(
-                            "canonical interview-prep.md was missing or empty; "
-                            "recovered rogue file's content"
-                        ),
-                        destination=target,
-                    )
-                )
-            except OSError as exc:
-                actions.append(
-                    CleanupAction(
-                        path=entry,
-                        action="skipped",
-                        reason=f"move failed: {exc}",
-                    )
-                )
-        else:
-            try:
-                entry.unlink()
-                actions.append(
-                    CleanupAction(
-                        path=entry,
-                        action="deleted",
-                        reason=(
-                            "canonical interview-prep.md already exists; "
-                            "rogue file is pollution"
-                        ),
-                    )
-                )
-            except OSError as exc:
-                actions.append(
-                    CleanupAction(
-                        path=entry,
-                        action="skipped",
-                        reason=f"delete failed: {exc}",
-                    )
-                )
-
-    return actions
 
 
 # ---------------------------------------------------------------------------
@@ -613,7 +477,7 @@ DEFAULT_IGNORE_DIRS = {
     # Critical: when resumasher is installed project-scope at
     # <project>/.claude/skills/resumasher/ (or .codex, .gemini, .opencode),
     # the folder miner would otherwise walk its own source tree +
-    # GOLDEN_FIXTURES and present them to the fit-analyst as the student's
+    # GOLDEN_FIXTURES and present them to the sub-agents as the student's
     # evidence. These dirs hold AI CLI skills/agents/settings — never
     # resume evidence.
     ".claude",
@@ -815,11 +679,11 @@ def mine_folder_context(
 
 
 # ---------------------------------------------------------------------------
-# 6. extract_fit_score / extract_company from prose
+# 6. extract company / role from the job-extractor's prose
 # ---------------------------------------------------------------------------
 
 # Each pattern accepts the plain `KEY: value` form prescribed by the
-# fit-analyst prompt AND markdown-bold variants weaker models emit
+# job-extractor prompt AND markdown-bold variants weaker models emit
 # despite the "on a line by itself" instruction:
 #   - **KEY:** value             (bold around key+colon)
 #   - **KEY**: value             (bold around just the key)
@@ -827,8 +691,7 @@ def mine_folder_context(
 #   - **KEY:** **value**         (bold around both, separately)
 # Observed under qwen3.6-35b on OpenCode (run ses_236d) — the model
 # produced `**ROLE:** Data Analyst` instead of `ROLE: Data Analyst`,
-# leaving role.txt empty and forcing the orchestrator to fabricate
-# downstream telemetry values.
+# leaving role.txt empty.
 #
 # The trick is `[\s*]*` (character class of whitespace OR `*`) before
 # and after each meaningful token: it absorbs any mix of `*` markers
@@ -838,40 +701,12 @@ def mine_folder_context(
 # the key-bold is structurally indistinguishable from the opening
 # `**` of the value-bold.
 #
-# `_FIT_SCORE_RE` is `re.search` (no MULTILINE anchor) so it already
-# matches anywhere in the prose; the others stay anchored to line
-# starts to avoid hijacking inline `ROLE:` mentions in body prose.
-# `(.+?)` lazy + trailing `[\s*]*$` greedy means `(.+?)` captures
-# the value with trailing `*` and whitespace stripped automatically.
-_FIT_SCORE_RE = re.compile(r"[\s*]*FIT_SCORE[\s*]*:[\s*]*(-?\d{1,2})\b", re.IGNORECASE)
+# Both stay anchored to line starts to avoid hijacking inline `ROLE:`
+# mentions in body prose. `(.+?)` lazy + trailing `[\s*]*$` greedy means
+# `(.+?)` captures the value with trailing `*` and whitespace stripped.
 _COMPANY_RE = re.compile(r"^[\s*]*COMPANY[\s*]*:[\s*]*(.+?)[\s*]*$", re.MULTILINE | re.IGNORECASE)
-_FAILURE_RE = re.compile(r"^[\s*]*FAILURE[\s*]*:[\s*]*.+", re.IGNORECASE)
 _ROLE_RE = re.compile(r"^[\s*]*ROLE[\s*]*:[\s*]*(.+?)[\s*]*$", re.MULTILINE | re.IGNORECASE)
-_SENIORITY_RE = re.compile(r"^[\s*]*SENIORITY[\s*]*:[\s*]*(.+?)[\s*]*$", re.MULTILINE | re.IGNORECASE)
-_STRENGTHS_COUNT_RE = re.compile(r"^[\s*]*STRENGTHS_COUNT[\s*]*:[\s*]*(\d{1,3})\b", re.MULTILINE | re.IGNORECASE)
-_GAPS_COUNT_RE = re.compile(r"^[\s*]*GAPS_COUNT[\s*]*:[\s*]*(\d{1,3})\b", re.MULTILINE | re.IGNORECASE)
-_RECOMMENDATION_RE = re.compile(r"^[\s*]*RECOMMENDATION[\s*]*:[\s*]*(.+?)[\s*]*$", re.MULTILINE | re.IGNORECASE)
-
-VALID_SENIORITY = frozenset({
-    "intern", "junior", "mid", "senior", "staff",
-    "manager", "director", "vp", "cxo", "unknown",
-})
-
-VALID_RECOMMENDATION = frozenset({"yes", "yes_with_caveats", "no"})
-
-
-def extract_fit_score(prose: str) -> Optional[int]:
-    """Return the integer from a FIT_SCORE: N line in 0..10, else None."""
-    match = _FIT_SCORE_RE.search(prose)
-    if not match:
-        return None
-    try:
-        score = int(match.group(1))
-    except (ValueError, TypeError):
-        return None
-    if score < 0 or score > 10:
-        return None
-    return score
+_FAILURE_RE = re.compile(r"^[\s*]*FAILURE[\s*]*:[\s*]*.+", re.IGNORECASE)
 
 
 def extract_company(prose: str) -> Optional[str]:
@@ -885,16 +720,6 @@ def extract_company(prose: str) -> Optional[str]:
     return value
 
 
-def is_failure_sentinel(prose: str) -> bool:
-    """True if the first non-blank line starts with 'FAILURE:'."""
-    for line in prose.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        return bool(_FAILURE_RE.match(stripped))
-    return False
-
-
 def extract_role(prose: str) -> Optional[str]:
     """Return the ROLE: value, stripped. Blank / UNKNOWN / missing -> None."""
     match = _ROLE_RE.search(prose)
@@ -906,64 +731,14 @@ def extract_role(prose: str) -> Optional[str]:
     return value
 
 
-def extract_seniority(prose: str) -> Optional[str]:
-    """Return the SENIORITY: value as a lowercase enum in VALID_SENIORITY.
-
-    The fit-analyst prompt guides the LLM to classify in ANY language (German
-    'Leitender Entwickler' -> senior, Japanese シニア -> senior, etc). Here
-    we only validate the emitted value against the enum whitelist. Unknown
-    -> None (so callers can distinguish "explicitly unknown" from "missing",
-    which matters for telemetry: we want to know when classification failed).
-    """
-    match = _SENIORITY_RE.search(prose)
-    if not match:
-        return None
-    value = match.group(1).strip().lower()
-    if value not in VALID_SENIORITY:
-        return None
-    if value == "unknown":
-        return None
-    return value
-
-
-def extract_strengths_count(prose: str) -> Optional[int]:
-    """Return the integer from STRENGTHS_COUNT: N, else None."""
-    match = _STRENGTHS_COUNT_RE.search(prose)
-    if not match:
-        return None
-    try:
-        return int(match.group(1))
-    except (ValueError, TypeError):
-        return None
-
-
-def extract_gaps_count(prose: str) -> Optional[int]:
-    """Return the integer from GAPS_COUNT: N, else None."""
-    match = _GAPS_COUNT_RE.search(prose)
-    if not match:
-        return None
-    try:
-        return int(match.group(1))
-    except (ValueError, TypeError):
-        return None
-
-
-def extract_recommendation(prose: str) -> Optional[str]:
-    """Return the RECOMMENDATION: value normalized to one of
-    {yes, yes_with_caveats, no} or None.
-
-    Accepts case variations ("Yes", "YES"), space-separated ("yes with
-    caveats"), and the hyphenated / underscored forms.
-    """
-    match = _RECOMMENDATION_RE.search(prose)
-    if not match:
-        return None
-    raw = match.group(1).strip().lower()
-    # Normalize punctuation between words to '_'
-    normalized = re.sub(r"[-\s]+", "_", raw)
-    if normalized in VALID_RECOMMENDATION:
-        return normalized
-    return None
+def is_failure_sentinel(prose: str) -> bool:
+    """True if the first non-blank line starts with 'FAILURE:'."""
+    for line in prose.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        return bool(_FAILURE_RE.match(stripped))
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -1013,253 +788,11 @@ GDPR_NOTE = (
     ".resumasher/ inside this folder. If this folder is a git repo, we will\n"
     "add .resumasher/ to your .gitignore automatically.\n"
     "\n"
-    "Your resume content, job descriptions, and application outputs are never\n"
-    "uploaded. At the end of setup you can OPTIONALLY opt into anonymous usage\n"
-    "analytics (event types, fit scores, company names, no resume or JD text)\n"
-    "to help the maintainer see what's breaking. Default is off. Full detail:\n"
-    "PRIVACY.md in the skill directory."
+    "Nothing is uploaded. Your resume, job descriptions, and generated\n"
+    "application files never leave this machine. The only network calls\n"
+    "resumasher makes are the ones you ask for: fetching a job posting URL,\n"
+    "reading your public GitHub profile, and the company web search."
 )
-
-
-# ---------------------------------------------------------------------------
-# inspect — JSON introspection for agent-driven debugging.
-#
-# When a student says "my resume looks wrong," the AI CLI running the
-# resumasher skill follows the playbook in SKILL.md's "Debugging this skill"
-# section. That playbook calls these `inspect` helpers to get structured
-# views of the artifacts: the parsed resume tree, the extracted PDF text,
-# the source photo dimensions. Each helper returns JSON so the LLM can read
-# it without having to shell-parse the output.
-#
-# Design: these return DATA, not interpretations. The LLM does the
-# hypothesis-forming using docs/KNOWN_FAILURE_MODES.md as a checklist.
-# We include a light `warnings` field that surfaces three obvious
-# parser-state red flags (empty name, empty contact, orphaned bullets);
-# the failure modes doc covers everything else.
-# ---------------------------------------------------------------------------
-
-
-def inspect_resume(path: Path) -> dict:
-    """
-    Parse a resume markdown file (usually `tailored-resume.md` from an
-    application folder, or the student's source `resume.md`) and return a
-    JSON-ready snapshot of the parser's internal view.
-
-    The LLM reading this uses it to spot mismatches between what the
-    markdown "looks like" and what the parser actually extracted. If the
-    markdown visually contains a name on line 1 but `doc.name` comes back
-    empty, that tells the agent the parser dropped the contact header.
-    Similarly, 0-bullet blocks next to N>0 `raw_bullets` in the same
-    section is the signature of orphaned bullets.
-    """
-    # Imported here to avoid a hard dependency at module-load time — the
-    # inspect flow is a debug path, not the hot path. Uses the sibling
-    # import shape (not `from scripts.render_pdf`) because line 46 puts
-    # `scripts/` on sys.path; the package-qualified shape only works in
-    # test context where conftest.py adds the repo root to sys.path.
-    from render_pdf import parse_resume_markdown
-
-    text = _read_text_with_encoding_detection(path)
-    doc = parse_resume_markdown(text)
-
-    # Light warnings for the three obvious bug signatures. These are
-    # shortcuts for the most common failure modes; the full checklist
-    # lives in docs/KNOWN_FAILURE_MODES.md for the agent to consult.
-    warnings = []
-    if not doc.name:
-        warnings.append({
-            "severity": "critical",
-            "code": "EMPTY_NAME",
-            "message": (
-                "Parser extracted no candidate name. The resume-header parse "
-                "expects `# Name` as the first non-empty line. Without it, "
-                "the rendered PDF will have no name — an ATS cannot associate "
-                "the resume with a candidate. Check line 1 of the markdown."
-            ),
-        })
-    if not doc.contact_line:
-        warnings.append({
-            "severity": "critical",
-            "code": "EMPTY_CONTACT_LINE",
-            "message": (
-                "Parser extracted no contact line. Expected on line 2 after "
-                "the `# Name` header, with email/phone/linkedin/location "
-                "separated by ` | `."
-            ),
-        })
-
-    sections_json = []
-    for section in doc.sections:
-        block_bullet_counts = [len(b.bullets) for b in section.blocks]
-        sub_block_counts = [len(b.sub_blocks) for b in section.blocks]
-        section_raw_bullets = len(section.raw_bullets)
-
-        # Orphaned bullets shows up in two shapes depending on how the
-        # markdown was structured:
-        #
-        # Shape A (parser saw blocks but didn't attach bullets):
-        #   section.blocks is non-empty, every block has 0 bullets, and
-        #   raw_bullets > 0. Rare — would require `###` headings with
-        #   no content under them.
-        #
-        # Shape B (parser didn't create blocks at all — the #19 case):
-        #   section.blocks is empty, raw_paragraphs contains `**Title**`-
-        #   looking lines that a reader would naturally read as sub-block
-        #   headings, and raw_bullets > 0. This is the "**Title** directly
-        #   under ##" shape the tailor produces when it skips the `###`
-        #   wrapper entirely.
-        title_like_paragraphs = [
-            p for p in section.raw_paragraphs
-            if p.startswith("**") and p.count("**") >= 2
-        ]
-        shape_a = (
-            bool(section.blocks)
-            and section_raw_bullets > 0
-            and all(c == 0 for c in block_bullet_counts)
-            and all(s == 0 for s in sub_block_counts)
-        )
-        shape_b = (
-            not section.blocks
-            and section_raw_bullets > 0
-            and bool(title_like_paragraphs)
-        )
-        if shape_a or shape_b:
-            shape = "A" if shape_a else "B"
-            warnings.append({
-                "severity": "critical",
-                "code": "ORPHANED_BULLETS",
-                "section": section.heading,
-                "shape": shape,
-                "message": (
-                    f"Section '{section.heading}' has {section_raw_bullets} "
-                    f"section-level bullets that look like they should be "
-                    f"attached to {max(len(section.blocks), len(title_like_paragraphs))} "
-                    f"sub-block titles but aren't. Classic '**Title** directly "
-                    f"under ##' shape (shape {shape}); the parser emitted "
-                    f"the titles as paragraphs and the bullets as loose "
-                    f"section-level items, so the PDF shows all titles first "
-                    f"then a flat bullet list. See KNOWN_FAILURE_MODES.md #2."
-                ),
-            })
-
-        # Previews help the agent see the actual shape without re-reading
-        # the file. Truncate long strings to keep JSON readable.
-        def _preview(s: str, n: int = 120) -> str:
-            s = s.replace("\n", " ").strip()
-            return s if len(s) <= n else s[:n] + "…"
-
-        sections_json.append({
-            "heading": section.heading,
-            "block_count": len(section.blocks),
-            "raw_bullet_count": section_raw_bullets,
-            "raw_paragraph_count": len(section.raw_paragraphs),
-            "block_titles": [b.title for b in section.blocks],
-            "block_bullet_counts": block_bullet_counts,
-            "block_sub_block_counts": sub_block_counts,
-            "raw_paragraph_previews": [_preview(p) for p in section.raw_paragraphs],
-            "raw_bullet_previews": [_preview(b) for b in section.raw_bullets],
-        })
-
-    # First non-empty line of the raw markdown — useful for EMPTY_NAME
-    # diagnosis. If there's no `# Name` H1, this is what the parser saw
-    # on line 1 and couldn't interpret as a header.
-    first_line_raw = ""
-    for line in text.splitlines():
-        if line.strip():
-            first_line_raw = line.strip()
-            break
-    has_h1 = first_line_raw.startswith("# ")
-
-    return {
-        "path": str(path),
-        "name": doc.name,
-        "contact_line": doc.contact_line,
-        "first_line_raw": first_line_raw,
-        "has_h1": has_h1,
-        "section_count": len(doc.sections),
-        "section_order": [s.heading for s in doc.sections],
-        "sections": sections_json,
-        "warnings": warnings,
-    }
-
-
-def inspect_pdf(path: Path) -> dict:
-    """
-    Extract text and basic metadata from a PDF produced by resumasher.
-    Used for rendered-vs-source comparisons (did the section order change?
-    is the contact header visibly missing?).
-    """
-    from pdfminer.high_level import extract_text
-
-    size_bytes = path.stat().st_size
-    extracted = extract_text(str(path))
-
-    # Detect the order in which section headings appear in the PDF text.
-    # Only headings we know resumasher renders — others are ignored to
-    # avoid false positives from bullet content that happens to match.
-    KNOWN_SECTION_HEADINGS = [
-        "Summary", "Experience", "Work Experience", "Research Experience",
-        "Education", "Skills", "Projects", "Languages", "Certifications",
-        "Publications", "Awards", "Volunteering",
-    ]
-    observed = []
-    for heading in KNOWN_SECTION_HEADINGS:
-        idx = extracted.find(heading)
-        if idx != -1:
-            observed.append((idx, heading))
-    observed.sort()
-    section_order_in_text = [h for _, h in observed]
-
-    return {
-        "path": str(path),
-        "size_bytes": size_bytes,
-        "extracted_char_count": len(extracted),
-        "extracted_text": extracted,
-        "section_order_in_text": section_order_in_text,
-    }
-
-
-def inspect_photo(path: Path) -> dict:
-    """
-    Return source photo dimensions so the agent can compare against the
-    render box (3cm × 3cm square). An aspect-ratio mismatch means the
-    rendered photo will be stretched.
-    """
-    from PIL import Image as PILImage
-
-    with PILImage.open(path) as img:
-        width, height = img.size
-        fmt = img.format
-
-    aspect = width / height if height else 0.0
-    # Render box as of 2026-04: 3cm × 3cm, square → aspect 1.0.
-    render_box_aspect = 1.0
-    aspect_delta_pct = abs(aspect - render_box_aspect) / render_box_aspect * 100 if render_box_aspect else 0.0
-
-    warnings = []
-    if abs(aspect - render_box_aspect) > 0.05:
-        warnings.append({
-            "severity": "notice",
-            "code": "PHOTO_ASPECT_STRETCH",
-            "message": (
-                f"Source photo aspect ratio {aspect:.2f} does not match the "
-                f"render box (3cm × 3cm, aspect {render_box_aspect:.2f}). "
-                f"reportlab's Image flowable stretches source to fill the "
-                f"box — the embedded photo will be distorted by ~"
-                f"{aspect_delta_pct:.0f}%. See KNOWN_FAILURE_MODES.md #4."
-            ),
-        })
-
-    return {
-        "path": str(path),
-        "format": fmt,
-        "width": width,
-        "height": height,
-        "aspect": round(aspect, 3),
-        "render_box_aspect": render_box_aspect,
-        "aspect_delta_pct": round(aspect_delta_pct, 1),
-        "warnings": warnings,
-    }
 
 
 def first_run_needed(cwd: Path) -> bool:
@@ -1379,22 +912,16 @@ def _cli() -> int:
     p = sub.add_parser("read-resume")
     p.add_argument("path")
 
-    p = sub.add_parser("extract-fit-score")
     p = sub.add_parser("extract-company")
     p = sub.add_parser("extract-role")
-    p = sub.add_parser("extract-seniority")
-    p = sub.add_parser("extract-strengths-count")
-    p = sub.add_parser("extract-gaps-count")
-    p = sub.add_parser("extract-recommendation")
 
     p = sub.add_parser(
-        "extract-fit-fields",
+        "extract-job-fields",
         help=(
-            "Read fit-assessment text on stdin, extract all 7 structured "
-            "fields (score, company, role, seniority, strengths-count, "
-            "gaps-count, recommendation), and write each to its own file "
-            "under --output-dir. Replaces the heredoc env-file pattern "
-            "that breaks when company / role contain spaces (issue #50)."
+            "Read job-extractor text on stdin, extract company and role, "
+            "and write each to its own file under --output-dir. Per-field "
+            "files rather than a shell-sourced env file, which breaks when "
+            "company / role contain spaces (issue #50)."
         ),
     )
     p.add_argument(
@@ -1402,8 +929,7 @@ def _cli() -> int:
         required=True,
         help=(
             "Directory to write per-field files into. Created if missing. "
-            "Files written: score.txt, company.txt, role.txt, seniority.txt, "
-            "strengths.txt, gaps.txt, recommendation.txt"
+            "Files written: company.txt, role.txt"
         ),
     )
 
@@ -1412,39 +938,6 @@ def _cli() -> int:
     p = sub.add_parser("append-history")
     p.add_argument("cwd")
     p.add_argument("json_line")
-
-    p = sub.add_parser(
-        "inspect",
-        help=(
-            "Return a JSON snapshot of a resumasher artifact for agent-driven "
-            "debugging. Pick exactly one of --resume, --pdf, --photo."
-        ),
-    )
-    inspect_group = p.add_mutually_exclusive_group(required=True)
-    inspect_group.add_argument("--resume", help="Path to a resume markdown file")
-    inspect_group.add_argument("--pdf", help="Path to a rendered PDF")
-    inspect_group.add_argument("--photo", help="Path to the source photo image")
-
-    p = sub.add_parser(
-        "cleanup-stray-outputs",
-        help=(
-            "Defense-in-depth: scan $STUDENT_CWD for rogue interview-prep "
-            "files a misbehaving sub-agent may have planted (issue #29). "
-            "Files newer than --since-timestamp whose names match interview "
-            "patterns are moved to $OUT_DIR/interview-prep.md (if missing) or "
-            "deleted (if the canonical file already exists). Emits a JSON "
-            "summary of actions on stdout. Always exits 0 — cleanup failures "
-            "are logged but never block the orchestrator."
-        ),
-    )
-    p.add_argument("--cwd", required=True, help="Student working directory to scan (top level only)")
-    p.add_argument("--out-dir", required=True, help="Path where the canonical interview-prep.md should live")
-    p.add_argument(
-        "--since-timestamp",
-        type=float,
-        required=True,
-        help="Epoch seconds; only files with mtime newer than this are candidates",
-    )
 
     p = sub.add_parser(
         "cleanup-stray-prompts",
@@ -1520,8 +1013,8 @@ def _cli() -> int:
         default=None,
         help=(
             "Output directory for this application (contains "
-            "company-research.md, tailored-resume.md). Required for "
-            "cover-letter and interview-coach kinds."
+            "company-research.md, tailored-resume.md). Required for the "
+            "cover-letter kind."
         ),
     )
     p.add_argument(
@@ -1689,15 +1182,6 @@ def _cli() -> int:
         print(read_resume(Path(args.path)))
         return 0
 
-    if args.command == "extract-fit-score":
-        text = sys.stdin.read()
-        score = extract_fit_score(text)
-        if score is None:
-            print("")
-            return 1
-        print(score)
-        return 0
-
     if args.command == "extract-company":
         text = sys.stdin.read()
         company = extract_company(text)
@@ -1716,50 +1200,13 @@ def _cli() -> int:
         print(role)
         return 0
 
-    if args.command == "extract-seniority":
-        text = sys.stdin.read()
-        seniority = extract_seniority(text)
-        if seniority is None:
-            print("")
-            return 1
-        print(seniority)
-        return 0
-
-    if args.command == "extract-strengths-count":
-        text = sys.stdin.read()
-        n = extract_strengths_count(text)
-        if n is None:
-            print("")
-            return 1
-        print(n)
-        return 0
-
-    if args.command == "extract-gaps-count":
-        text = sys.stdin.read()
-        n = extract_gaps_count(text)
-        if n is None:
-            print("")
-            return 1
-        print(n)
-        return 0
-
-    if args.command == "extract-recommendation":
-        text = sys.stdin.read()
-        rec = extract_recommendation(text)
-        if rec is None:
-            print("")
-            return 1
-        print(rec)
-        return 0
-
-    if args.command == "extract-fit-fields":
-        # Read the fit-assessment text once, run every extractor, and
-        # persist each value to its own file under --output-dir. The
-        # per-field-file shape replaces the previous SKILL.md pattern of
-        # writing key=value lines to fit-extracted.env and shell-sourcing
-        # them in Phase 9 — that pattern breaks when company / role
-        # contain spaces (e.g. "Elevation Capital" → bash parses
-        # "Capital" as a command). See issue #50.
+    if args.command == "extract-job-fields":
+        # Read the job-extractor text once and persist each value to its
+        # own file under --output-dir. The per-field-file shape replaces
+        # writing key=value lines to an env file and shell-sourcing them —
+        # that pattern breaks when company / role contain spaces (e.g.
+        # "Elevation Capital" → bash parses "Capital" as a command).
+        # See issue #50.
         text = sys.stdin.read()
         out_dir = Path(args.output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -1770,23 +1217,18 @@ def _cli() -> int:
         # Missing values render as empty files; the agent decides how to
         # handle "" downstream (the existing UNKNOWN sentinel handling).
         fields = {
-            "score.txt": extract_fit_score(text),
             "company.txt": extract_company(text),
             "role.txt": extract_role(text),
-            "seniority.txt": extract_seniority(text),
-            "strengths.txt": extract_strengths_count(text),
-            "gaps.txt": extract_gaps_count(text),
-            "recommendation.txt": extract_recommendation(text),
         }
         for filename, value in fields.items():
             target = out_dir / filename
             target.write_text(
                 "" if value is None else str(value), encoding="utf-8"
             )
-        # Stdout summary so the caller can sanity-check at the bash
-        # level without re-cat-ing every file. JSON-ish but flat so
-        # there's no shell-eats-JSON repeat of issue #44.
-        for key in ("score", "company", "role", "seniority"):
+        # Stdout summary so the caller can sanity-check at the bash level
+        # without re-cat-ing every file. Flat key=value so there's no
+        # shell-eats-JSON repeat of issue #44.
+        for key in ("company", "role"):
             v = fields[f"{key}.txt"]
             sys.stdout.write(f"{key}={'' if v is None else v}\n")
         return 0
@@ -1799,43 +1241,6 @@ def _cli() -> int:
         record = json.loads(args.json_line)
         path = append_history(Path(args.cwd), record)
         print(str(path))
-        return 0
-
-    if args.command == "inspect":
-        if args.resume:
-            result = inspect_resume(Path(args.resume))
-        elif args.pdf:
-            result = inspect_pdf(Path(args.pdf))
-        elif args.photo:
-            result = inspect_photo(Path(args.photo))
-        else:  # pragma: no cover — argparse mutually_exclusive_group(required=True)
-            print("inspect requires --resume, --pdf, or --photo", file=sys.stderr)
-            return 2
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0
-
-    if args.command == "cleanup-stray-outputs":
-        actions = cleanup_stray_outputs(
-            cwd=Path(args.cwd),
-            out_dir=Path(args.out_dir),
-            since_timestamp=args.since_timestamp,
-        )
-        summary = {
-            "scanned": str(Path(args.cwd).resolve()),
-            "actions": [
-                {
-                    "path": str(a.path),
-                    "action": a.action,
-                    "reason": a.reason,
-                    "destination": str(a.destination) if a.destination else None,
-                }
-                for a in actions
-            ],
-            "moved": sum(1 for a in actions if a.action == "moved"),
-            "deleted": sum(1 for a in actions if a.action == "deleted"),
-            "skipped": sum(1 for a in actions if a.action == "skipped"),
-        }
-        print(json.dumps(summary))
         return 0
 
     if args.command == "cleanup-stray-prompts":
@@ -1978,7 +1383,7 @@ def _cmd_build_prompt(args: argparse.Namespace) -> int:
                 return 2
             content = _read_if_exists(out_dir / "company-research.md")
             if content is None:
-                return _missing(var, out_dir / "company-research.md", "the company-researcher sub-agent in Phase 4")
+                return _missing(var, out_dir / "company-research.md", "the company-researcher sub-agent in Phase 3")
             kwargs[var] = content
         elif var == "tailored_resume":
             if out_dir is None:
@@ -1989,7 +1394,7 @@ def _cmd_build_prompt(args: argparse.Namespace) -> int:
                 return 2
             content = _read_if_exists(out_dir / "tailored-resume.md")
             if content is None:
-                return _missing(var, out_dir / "tailored-resume.md", "the tailor sub-agent in Phase 5")
+                return _missing(var, out_dir / "tailored-resume.md", "the tailor sub-agent in Phase 4")
             kwargs[var] = content
         elif var == "contact_info":
             # Read configured contact fields from .resumasher/config.json and

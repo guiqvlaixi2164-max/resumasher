@@ -11,7 +11,7 @@ UnicodeEncodeError and the pipeline dies mid-phase.
 
 Windows CI (#34) surfaced this class of bug in `test_prompts.py`, but the
 problem is production-path — any Windows student running orchestration,
-render_pdf, or github_mine hits it the moment output includes a `→`.
+or github_mine hits it the moment output includes a `→`.
 
 These tests simulate the Windows behavior on any OS by invoking the CLIs
 with `PYTHONIOENCODING=cp1252`, which makes CPython's TextIOWrapper use the

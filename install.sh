@@ -162,12 +162,11 @@ if [ -f "$OPENCODE_CMD_SRC" ] && command -v opencode >/dev/null 2>&1; then
   fi
 fi
 
-# OpenCode tool_output.max_bytes detection. resumasher's SKILL.md is ~82KB,
-# above OpenCode's default 51,200-byte tool-output cap. When the cap is too
-# low, OpenCode truncates the skill load and weak local models (qwen,
-# llama-32b, etc.) miss Phase 7-9 prescriptions — wrong PDF filenames,
-# missing interview-prep.pdf, skeletal Phase 9 telemetry. Strong cloud
-# models (Claude, GPT-5) usually recover but the bug is real.
+# OpenCode tool_output.max_bytes detection. SKILL.md now fits comfortably
+# under OpenCode's default 51,200-byte tool-output cap, but a user who has
+# LOWERED the cap would still get a truncated skill load — and a model that
+# sees only the first half of the workflow ships broken output rather than
+# failing loudly. The check below stays as a guard against that case.
 #
 # We READ the user's opencode config (never write to it) and warn if the
 # cap is below SKILL.md's size. The user's config stays the user's

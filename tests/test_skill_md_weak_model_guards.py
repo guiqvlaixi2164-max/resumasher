@@ -40,7 +40,7 @@ def test_phase_0_prescribes_mkdir_before_config_json_write(skill_text: str):
     Without it, the redirect fails on a fresh folder and the next phase
     runs against an empty config."""
     # Locate the relevant Phase 0 section by anchor.
-    anchor = "Write `.resumasher/config.json` with those values"
+    anchor = "The parent `.resumasher/` may not exist yet"
     idx = skill_text.find(anchor)
     assert idx != -1, f"Phase 0 anchor {anchor!r} not found in SKILL.md"
     # The 600-char window after the anchor should contain both the
