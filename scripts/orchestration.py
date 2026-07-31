@@ -1042,6 +1042,56 @@ def sanitize_dashes(document: str) -> tuple[str, list[dict]]:
     return "\n".join(out_lines) + trailing, changes
 
 
+# ---------------------------------------------------------------------------
+# 6.8 bulletize: every bullet starts with a solid circle
+# ---------------------------------------------------------------------------
+#
+# Same reasoning as sanitize_dashes: the tailor prompt asks for "• ", and this
+# makes it true regardless of what the model felt like emitting. A markdown
+# "- " is a list marker in a renderer but a literal hyphen everywhere the
+# student actually sends the document from — pasted into Word, Google Docs, or
+# an application form's textarea — and a hyphen there reads as an unfinished
+# draft.
+#
+# Only a leading list marker is rewritten. A hyphen inside bullet text
+# ("A/B-tested", "end-to-end"), a "---" horizontal rule, and anything inside a
+# fenced code block are all left alone.
+
+_LIST_MARKER_RE = re.compile(r"^(\s*)[-*+][ \t]+(?=\S)")
+_BULLET_CHAR = "•"
+
+
+def bulletize(document: str) -> tuple[str, list[dict]]:
+    """Rewrite markdown list markers in `document` as "• ".
+
+    Returns (new_text, changes); each change records the 1-indexed line
+    number and the before/after text, mirroring sanitize_dashes.
+    """
+    changes: list[dict] = []
+    out_lines: list[str] = []
+    in_fence = False
+
+    for lineno, line in enumerate(document.splitlines(), start=1):
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            out_lines.append(line)
+            continue
+        if in_fence:
+            out_lines.append(line)
+            continue
+        rewritten = _LIST_MARKER_RE.sub(rf"\g<1>{_BULLET_CHAR} ", line, count=1)
+        out_lines.append(rewritten)
+        if rewritten != line:
+            changes.append({
+                "line": lineno,
+                "before": line.strip(),
+                "after": rewritten.strip(),
+            })
+
+    trailing = "\n" if document.endswith("\n") else ""
+    return "\n".join(out_lines) + trailing, changes
+
+
 def lint_output(document: str, *, kind: str = "resume") -> list[dict]:
     """Return a list of warning dicts for `document`.
 
@@ -1381,6 +1431,23 @@ def _cli() -> int:
         "--check",
         action="store_true",
         help="Report what would change without writing (exit 1 if any em dash found)",
+    )
+
+    p = sub.add_parser(
+        "bulletize",
+        help=(
+            "Deterministic (no LLM): rewrite the file in place with every "
+            "markdown list marker ('- ', '* ', '+ ') replaced by a solid "
+            "bullet character ('• '). Hyphens inside text, '---' rules and "
+            "fenced code blocks are untouched. This is the hard guarantee "
+            "behind the bullet-marker rule in the tailor prompt."
+        ),
+    )
+    p.add_argument("--input", required=True, help="Markdown file to rewrite in place")
+    p.add_argument(
+        "--check",
+        action="store_true",
+        help="Report what would change without writing (exit 1 if any '- ' marker found)",
     )
 
     p = sub.add_parser(
@@ -1785,6 +1852,25 @@ def _cli() -> int:
             "Re-read the lines above. A comma occasionally lands where a "
             "period would read better."
         )
+        return 0
+
+    if args.command == "bulletize":
+        target = Path(args.input)
+        doc = _read_if_exists(target)
+        if doc is None:
+            print(f"FAILURE: no such file: {args.input}", file=sys.stderr)
+            return 2
+        converted, changes = bulletize(doc)
+        if not changes:
+            print(f"{target.name}: every bullet already starts with •")
+            return 0
+        if args.check:
+            print(f"{target.name}: {len(changes)} line(s) still use a markdown list marker")
+            for c in changes:
+                print(f"  line {c['line']}: {c['before']}")
+            return 1
+        target.write_text(converted, encoding="utf-8")
+        print(f"{target.name}: rewrote {len(changes)} bullet marker(s) to •")
         return 0
 
     if args.command == "lint-output":

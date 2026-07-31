@@ -637,11 +637,11 @@ each title, NOT three separate peer entries. Format:
 
     ### Meta (July 2017 – August 2025)
     **Senior Director, Data Science** (Aug 2022 – Aug 2025)
-    - bullet
+    • bullet
     **Director, Data Science** (Jan 2021 – Sep 2022)
-    - bullet
+    • bullet
     **Data Science Manager** (Jul 2017 – Feb 2021)
-    - bullet
+    • bullet
 
 This preserves the career-progression narrative that a flat list destroys.
 
@@ -661,7 +661,7 @@ states they did X (e.g., "led the fraud detection team") but does NOT give
 a specific metric the JD would want (team size, revenue impact, accuracy,
 scale), you may emit an `[INSERT ...]` placeholder for the metric only:
 
-    - Led a team of [INSERT TEAM SIZE] fraud detection engineers,
+    • Led a team of [INSERT TEAM SIZE] fraud detection engineers,
       shipping the classifier pipeline that handled [INSERT QPS] requests
       per second.
 
@@ -692,7 +692,7 @@ fabrication in the interview; they do not spot the omitted topic.
 in an HTML comment on the same line, giving a no-metric-claim version the
 student can swap in when they don't have the number. Format:
 
-    - Led a team of [INSERT TEAM SIZE] data scientists building [INSERT PRODUCT/AREA], delivering [INSERT METRIC OR OUTCOME]. <!--SOFT: Led a senior data science organization across multiple product verticals, setting delivery standards and engagement model with product and engineering leadership.-->
+    • Led a team of [INSERT TEAM SIZE] data scientists building [INSERT PRODUCT/AREA], delivering [INSERT METRIC OR OUTCOME]. <!--SOFT: Led a senior data science organization across multiple product verticals, setting delivery standards and engagement model with product and engineering leadership.-->
 
 The SOFT version must be a complete, shippable bullet that stands on its
 own without requiring any metric substitution. Keep it truthful to the
@@ -743,6 +743,23 @@ source resume only gives a year for one role, use `Jan YYYY` only when
 the evidence supports it — otherwise keep bare years for every entry and
 stay consistent that way.
 
+## Bullet marker
+
+Every bullet line in the output starts with a solid circle and one space:
+
+    • Built the churn model...
+
+Not `- `, not `*`, not `+`. This applies to every list in the document —
+experience, projects, skills, education, earlier roles, certifications — with
+no exceptions. The student sends this document by pasting it into Word, Google
+Docs, or an application form, none of which turn a hyphen into a bullet; a
+literal `- ` arrives on the recruiter's screen as a hyphen and reads as an
+unfinished draft.
+
+The rule is about the LINE MARKER only. Hyphens inside bullet text are
+unaffected: "A/B-tested", "end-to-end", "Power BI-based" all keep their
+hyphens.
+
 Schema (sections shown in anglophone order; reorder per the rule above):
 
     # {Full Name}
@@ -754,29 +771,29 @@ Schema (sections shown in anglophone order; reorder per the rule above):
     ## Experience
     ### {Company} ({total tenure dates})       <-- for multi-role tenures
     **{Title 1}** ({dates})
-    - bullet
+    • bullet
     **{Title 2}** ({dates})
-    - bullet
+    • bullet
 
     ### {Title} — {Company} ({dates})          <-- for single-role tenures
-    - bullet
-    - bullet
+    • bullet
+    • bullet
 
     ## Earlier roles                            <-- OPTIONAL, for 15+ year careers
-    - {Title}, {Company} ({years})
-    - {Title}, {Company} ({years})
+    • {Title}, {Company} ({years})
+    • {Title}, {Company} ({years})
 
     ## Projects                                 <-- OMIT if no real projects
     ### {Project name} ({path or URL})          <-- ONE project per heading
-    - bullet with a metric if available
+    • bullet with a metric if available
 
     ## Skills
-    - Category: item, item, item
-    - Category: item, item
+    • Category: item, item, item
+    • Category: item, item
 
     ## Education
     ### {Degree} — {Institution} ({dates})
-    - bullet (only if the degree needs explanation)
+    • bullet (only if the degree needs explanation)
 
 **Projects section rules.** OMIT this section entirely if the EVIDENCE block
 does not contain concrete projects — either folder entries (e.g.,
@@ -799,7 +816,7 @@ related, that relationship belongs in the bullets of one or both entries,
 not in a combined heading.
 
     ## Certifications                           <-- OPTIONAL, see filter rule
-    - {Cert name}
+    • {Cert name}
 
 """ + HUMAN_VOICE_RULES + """
 On a resume the voice rules above apply to the summary and to bullet

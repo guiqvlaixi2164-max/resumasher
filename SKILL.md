@@ -594,7 +594,7 @@ PROMPT=$("$RS" orchestration build-prompt --kind tailor --cwd "$STUDENT_CWD")
 ```
 
 The compiled prompt carries the full tailoring spec — schema, section order per
-market, bullet ranking, length targets, multi-role tenure format,
+market, bullet ranking and bullet marker, length targets, multi-role tenure format,
 `[INSERT ...]` placeholder rules, the SOFT-alternate requirement, and the
 non-negotiable ANCHORING RULE forbidding fabricated experience to match the JD.
 It also contains a pre-built contact header read from `.resumasher/config.json`,
@@ -685,6 +685,19 @@ those with the Edit tool. Do not skip the re-read, and do not skip the command
 because the letter "looks fine" — you cannot reliably spot an em dash by
 eye in a terminal.
 
+**Normalize the resume's bullet markers — also mandatory.** Every bullet in the
+tailored resume ships as `• `, never `- `. The prompt asks for it; this makes it
+true:
+
+```bash
+"$RS" orchestration bulletize --input "$OUT_DIR/tailored-resume.md"
+```
+
+It rewrites leading `- ` / `* ` / `+ ` list markers only. Hyphens inside bullet
+text ("A/B-tested", "end-to-end") and `---` rules are left alone, so there is
+nothing to re-read afterwards. Resume only — the cover letter is prose and has
+no bullets to convert.
+
 **Retry budget:** 1 retry. On second failure write a stub and continue — the
 student still gets the resume:
 
@@ -744,11 +757,16 @@ echo "--- cover letter check ---"
 echo "--- em dash guarantee (must report zero) ---"
 "$RS" orchestration sanitize-dashes --input "$OUT_DIR/cover-letter.md" --check
 "$RS" orchestration sanitize-dashes --input "$OUT_DIR/tailored-resume.md" --check
+
+echo "--- bullet marker guarantee (must report zero) ---"
+"$RS" orchestration bulletize --input "$OUT_DIR/tailored-resume.md" --check
 ```
 
 `--check` reports without rewriting and exits 1 if it finds anything. After
 Phase 5's mandatory sanitize pass, both should print "no em dashes". If either
-does not, the sanitize step was skipped — run it without `--check` now.
+does not, the sanitize step was skipped — run it without `--check` now. The
+same holds for `bulletize --check`: it should report that every bullet already
+starts with •.
 
 `keyword-coverage` reports which of the JD's required and preferred terms
 appear in the tailored resume. **A missing term is not automatically a bug.**

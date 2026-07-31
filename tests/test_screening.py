@@ -480,6 +480,122 @@ def test_cli_sanitize_dashes_check_mode_exits_0_when_clean(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
+# bulletize — every resume bullet ships as "• ", not "- "
+# ---------------------------------------------------------------------------
+
+
+def test_bulletize_converts_dash_markers():
+    from scripts.orchestration import bulletize
+
+    out, changes = bulletize("- Built the churn model.\n- Shipped it.\n")
+    assert out == "• Built the churn model.\n• Shipped it.\n"
+    assert [c["line"] for c in changes] == [1, 2]
+
+
+def test_bulletize_converts_star_and_plus_markers():
+    from scripts.orchestration import bulletize
+
+    out, _ = bulletize("* One\n+ Two\n")
+    assert out == "• One\n• Two\n"
+
+
+def test_bulletize_preserves_indentation():
+    from scripts.orchestration import bulletize
+
+    out, _ = bulletize("  - nested bullet\n")
+    assert out == "  • nested bullet\n"
+
+
+def test_bulletize_leaves_hyphens_inside_text_alone():
+    """The rule is about the line marker, not about hyphens."""
+    from scripts.orchestration import bulletize
+
+    out, _ = bulletize("- A/B-tested the end-to-end pipeline, Power BI-based.\n")
+    assert out == "• A/B-tested the end-to-end pipeline, Power BI-based.\n"
+
+
+def test_bulletize_leaves_horizontal_rules_and_headings_alone():
+    from scripts.orchestration import bulletize
+
+    doc = "# Ana Silva\n\n---\n\n### Data Analyst - Acme (Mar 2022 – Aug 2024)\n"
+    out, changes = bulletize(doc)
+    assert out == doc
+    assert changes == []
+
+
+def test_bulletize_skips_fenced_code_blocks():
+    from scripts.orchestration import bulletize
+
+    doc = "```bash\n- not a bullet\n```\n- a bullet\n"
+    out, changes = bulletize(doc)
+    assert "- not a bullet" in out
+    assert "• a bullet" in out
+    assert len(changes) == 1
+
+
+def test_bulletize_is_idempotent():
+    from scripts.orchestration import bulletize
+
+    once, _ = bulletize("- Built the churn model.\n")
+    twice, changes = bulletize(once)
+    assert twice == once
+    assert changes == []
+
+
+def test_bulletize_preserves_trailing_newline():
+    from scripts.orchestration import bulletize
+
+    out, _ = bulletize("- A\n")
+    assert out.endswith("\n")
+    out2, _ = bulletize("- A")
+    assert not out2.endswith("\n")
+
+
+def test_bulletize_converts_skills_lines():
+    """The skills section is a list too — 'Category: item, item' lines
+    get the same marker as experience bullets."""
+    from scripts.orchestration import bulletize
+
+    out, _ = bulletize("## Skills\n- Programming: Python, SQL, R\n")
+    assert "• Programming: Python, SQL, R" in out
+
+
+def test_cli_bulletize_rewrites_file(tmp_path: Path):
+    f = tmp_path / "tailored-resume.md"
+    f.write_text("- Built the churn model.\n", encoding="utf-8")
+    r = _run(["bulletize", "--input", str(f)])
+    assert r.returncode == 0, r.stderr
+    assert f.read_text(encoding="utf-8") == "• Built the churn model.\n"
+
+
+def test_cli_bulletize_check_mode_does_not_write(tmp_path: Path):
+    f = tmp_path / "tailored-resume.md"
+    original = "- Built the churn model.\n"
+    f.write_text(original, encoding="utf-8")
+    r = _run(["bulletize", "--input", str(f), "--check"])
+    assert r.returncode == 1
+    assert f.read_text(encoding="utf-8") == original
+
+
+def test_cli_bulletize_check_mode_exits_0_when_already_converted(tmp_path: Path):
+    f = tmp_path / "tailored-resume.md"
+    f.write_text("• Built the churn model.\n", encoding="utf-8")
+    r = _run(["bulletize", "--input", str(f), "--check"])
+    assert r.returncode == 0
+
+
+def test_tailor_prompt_specifies_the_bullet_character():
+    """The deterministic pass is the guarantee, but the prompt has to ask
+    for it too — otherwise every run rewrites every line."""
+    from scripts.prompts import TAILOR_PROMPT
+
+    assert "## Bullet marker" in TAILOR_PROMPT
+    assert "• Built the churn model" in TAILOR_PROMPT
+    assert "• Category: item, item, item" in TAILOR_PROMPT
+    assert "- bullet" not in TAILOR_PROMPT
+
+
+# ---------------------------------------------------------------------------
 # Cover-letter prompt: the requirements the student specified
 # ---------------------------------------------------------------------------
 
